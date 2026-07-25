@@ -1,0 +1,17 @@
+# research & design artifacts (heatmaps, analysis, scratch) — disposable
+tmp/
+
+# datasets: source traces (mc_trace) and generated task datasets — not versioned
+game_trace/
+
+# emulator save-states / traces / task episodes (large binaries)
+*.npz
+
+# claude code personal/local settings
+.claude/settings.local.json
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/

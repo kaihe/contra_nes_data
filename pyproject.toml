@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "contra-nes-data"
+version = "0.1.0"
+description = "Contra NES event/reward tooling and game-trace analysis"
+requires-python = ">=3.10"
+
+# src/ layout: the top-level packages env/, agent/, util/ live under src/, so
+# after `pip install -e .` they import cleanly as `env.*`, `agent.*`, `util.*`
+# (no `src.` prefix).
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# Ship the YAML action configs that action.py loads at import time.
+[tool.setuptools.package-data]
+agent = ["*.yaml"]
