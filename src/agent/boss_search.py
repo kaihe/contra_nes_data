@@ -14,11 +14,14 @@ Example pilot::
 
 import argparse
 import glob
+import gzip
+import hashlib
 import os
 import time
 from dataclasses import dataclass
 
 import numpy as np
+import yaml
 
 from agent.mc_search import _run_one_search
 from env.constant import ADDR_WEAPON, WEAPON_NAMES
@@ -32,6 +35,8 @@ from util.replay import SKIP, make_env, rewind_state, step_env
 DEFAULT_SOURCES = "game_trace/tasks/boss/boss_level1/*.npz"
 DEFAULT_TRACE_OUT = "game_trace/mc_trace/boss_level1"
 DEFAULT_TASK_OUT = "game_trace/tasks/boss"
+DEFAULT_STATE_BANK = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                  "states", "boss_level1")
 
 
 @dataclass(frozen=True)
@@ -86,6 +91,73 @@ def _weapon_meta(ram) -> tuple[str, bool]:
     raw = int(ram[ADDR_WEAPON])
     gun = raw & 0x0f
     return WEAPON_NAMES.get(gun, f"Unknown{gun}"), bool(raw & 0x10)
+
+
+def build_state_bank(paths: list[str], out_dir: str = DEFAULT_STATE_BANK,
+                     *, seed: int = 0) -> list[dict]:
+    """Save a compact, weapon-balanced bank of full and partial boss states.
+
+    One representative train source per observed weapon is chosen by median
+    fight length. Each contributes its reveal state and one deterministic
+    post-reveal partial state. Files use the same gzip-compressed stable-retro
+    state format as ``states/spread_gun/Level<N>.state``; ``manifest.yaml`` owns
+    the source lineage and interpreted metadata.
+    """
+    by_weapon = {}
+    for path in paths:
+        seg = load_task(path)
+        weapon = str(seg.meta.get("weapon", ""))
+        if not weapon:
+            raise ValueError(f"boss task lacks weapon metadata: {path}")
+        by_weapon.setdefault(weapon, []).append((len(seg.actions), path))
+    os.makedirs(out_dir, exist_ok=True)
+    entries = []
+
+    for weapon_index, weapon in enumerate(sorted(by_weapon)):
+        ranked = sorted(by_weapon[weapon])
+        _, source_path = ranked[len(ranked) // 2]
+        starts = [
+            ("full", capture_start(source_path, full=True,
+                                   rng=np.random.default_rng(seed + weapon_index))),
+            ("partial", capture_start(
+                source_path, full=False,
+                rng=np.random.default_rng(
+                    np.random.SeedSequence([seed, weapon_index, 1]).generate_state(1)[0]
+                ),
+            )),
+        ]
+        slug = weapon.lower().replace(" ", "_")
+        for stage, start in starts:
+            filename = f"{stage}_{slug}.state"
+            path = os.path.join(out_dir, filename)
+            with open(path, "wb") as raw:
+                with gzip.GzipFile(filename="", fileobj=raw, mode="wb", mtime=0) as fh:
+                    fh.write(start.initial_state)
+            entries.append({
+                "name": f"{stage}_{slug}",
+                "file": filename,
+                "stage": stage,
+                "source_task": start.source.uid,
+                "src_trace": start.source.src_trace,
+                "split": "train",
+                "source_offset": start.offset,
+                "offset_frac": float(start.offset_frac),
+                "weapon": start.weapon,
+                "rapid": bool(start.rapid),
+                "boss_hp_start": int(start.boss_hp_start),
+                "skip": int(start.source.skip),
+                "state_sha256": hashlib.sha256(start.initial_state).hexdigest(),
+            })
+    manifest = {
+        "level": 1,
+        "seed": int(seed),
+        "selection": "median-length train source per weapon; full + one partial",
+        "states": entries,
+    }
+    with open(os.path.join(out_dir, "manifest.yaml"), "w") as fh:
+        yaml.safe_dump(manifest, fh, sort_keys=False)
+    print(f"wrote {len(entries)} boss states -> {out_dir}")
+    return entries
 
 
 def capture_start(source_path: str, *, full: bool,
@@ -417,12 +489,17 @@ def _parse_args(argv=None):
     p.add_argument("--attempts-per-request", type=int, default=3)
     p.add_argument("--no-manifest", action="store_true",
                    help="skip manifest rebuild (use for concurrently running shards)")
+    p.add_argument("--build-state-bank", nargs="?", const=DEFAULT_STATE_BANK,
+                   metavar="DIR", help="write curated boss states and exit")
     return p.parse_args(argv)
 
 
 def main(argv=None):
     args = _parse_args(argv)
     paths = train_sources(args.sources)
+    if args.build_state_bank:
+        build_state_bank(paths, args.build_state_bank, seed=args.seed)
+        return
     if args.full_per_source is not None:
         requests = batch_requests(
             paths, full_per_source=args.full_per_source,

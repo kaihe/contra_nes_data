@@ -4,9 +4,11 @@ import glob
 
 import numpy as np
 import pytest
+import yaml
 
 from agent import reward
-from agent.boss_search import batch_requests, capture_start, train_sources
+from agent.boss_search import (batch_requests, build_state_bank, capture_start,
+                               train_sources)
 from agent.mc_search import SearchEffort, save_trace
 from env.constant import (ADDR_ENEMY_HP, ADDR_ENEMY_TYPE, ADDR_LEVEL,
                           ADDR_WEAPON)
@@ -96,6 +98,37 @@ def test_batch_schedule_covers_every_full_source_and_shards_are_disjoint():
         r.request_id for shard in shards for r in shard
     }
     assert sum(len(shard) for shard in shards) == len(whole)
+
+
+def test_build_state_bank_writes_full_and_partial_per_weapon(tmp_path, monkeypatch):
+    paths = []
+    weapons = ["Regular", "Spread"]
+    for index, weapon in enumerate(weapons):
+        path = tmp_path / f"source{index}.npz"
+        _minimal_task(path, split="train", weapon=weapon)
+        paths.append(str(path))
+
+    def fake_capture(path, *, full, rng):
+        from agent.boss_search import BossStart
+        from task_maker.base import load_task
+        source = load_task(path)
+        weapon = str(source.meta["weapon"])
+        return BossStart(path, source, f"{weapon}-{full}".encode(),
+                         0 if full else 1, 0.0 if full else 0.5,
+                         64 if full else 32, weapon, weapon == "Spread", 200)
+
+    monkeypatch.setattr("agent.boss_search.capture_start", fake_capture)
+    out = tmp_path / "bank"
+    entries = build_state_bank(paths, str(out), seed=11)
+
+    assert len(entries) == 4
+    assert {e["name"] for e in entries} == {
+        "full_regular", "partial_regular", "full_spread", "partial_spread"
+    }
+    assert all((out / e["file"]).exists() for e in entries)
+    manifest = yaml.safe_load((out / "manifest.yaml").read_text())
+    assert manifest["seed"] == 11
+    assert len(manifest["states"]) == 4
 
 
 def test_save_trace_metadata_round_trip_and_reserved_keys(tmp_path):

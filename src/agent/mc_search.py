@@ -28,8 +28,10 @@ Usage:
 
 import argparse
 import gzip
+import hashlib
 import multiprocessing as mp
 import os
+import re
 import time
 import warnings
 from dataclasses import dataclass
@@ -38,6 +40,7 @@ warnings.filterwarnings("ignore", message=".*Gym has been unmaintained.*")
 
 import numpy as np
 import stable_retro as retro
+import yaml
 
 from agent.reward import compute_reward
 from agent.sampler import ActionSampler
@@ -93,6 +96,36 @@ def make_search_env(level: int, obs_type):
             env.initial_state = fh.read()
     env.reset()
     return env
+
+
+def load_initial_state(path: str) -> tuple[bytes, dict]:
+    """Load a gzip savestate and its optional adjacent state-bank metadata."""
+    with gzip.open(path, "rb") as fh:
+        state = fh.read()
+    metadata = {
+        "initial_state_file": os.path.basename(path),
+        "initial_state_sha256": hashlib.sha256(state).hexdigest(),
+    }
+    manifest_path = os.path.join(os.path.dirname(path), "manifest.yaml")
+    if os.path.exists(manifest_path):
+        with open(manifest_path) as fh:
+            manifest = yaml.safe_load(fh) or {}
+        entry = next(
+            (item for item in manifest.get("states", [])
+             if item.get("file") == os.path.basename(path)),
+            None,
+        )
+        if entry is None:
+            raise ValueError(f"state is not listed in {manifest_path}: {path}")
+        expected = entry.get("state_sha256")
+        if expected and expected != metadata["initial_state_sha256"]:
+            raise ValueError(f"state checksum does not match {manifest_path}: {path}")
+        metadata.update({k: v for k, v in entry.items()
+                         if k not in {"file", "state_sha256", "skip"}})
+        if "skip" in entry:
+            metadata["source_skip"] = entry["skip"]
+        metadata["state_bank_seed"] = manifest.get("seed", -1)
+    return state, metadata
 
 
 # Worker process state: an env + the (rebuilt) sampler, set once in _worker_init.
@@ -449,7 +482,9 @@ def _run_one_search(level, rollouts, rollout_len, max_time, max_rewind, max_acti
 
 def generate_traces(level, n, *, rollouts=64, rollout_len=48, max_time=600,
                     max_rewind=30, max_actions=6000, goal="level_up",
-                    workers=None, settle_margin=16, max_attempts=None):
+                    workers=None, settle_margin=16, max_attempts=None,
+                    initial_emu_state=None, trace_metadata=None,
+                    trace_dir=None, trace_stem=None):
     """Loop the search in one process until `n` winning traces are collected.
 
     Each search opens/closes its own env+pool (one emulator per process) and
@@ -464,11 +499,18 @@ def generate_traces(level, n, *, rollouts=64, rollout_len=48, max_time=600,
     t_start = time.time()
     while len(paths) < n and attempts < max_attempts:
         t0 = time.time()
+        trace_path = None
+        if trace_dir is not None:
+            date_str = time.strftime("%Y%m%d%H%M%S")
+            trace_path = os.path.join(
+                trace_dir, f"{trace_stem or 'win'}_{date_str}_i{attempts}.npz")
         path = _run_one_search(
             level=level, rollouts=rollouts, rollout_len=rollout_len,
             max_time=max_time, max_rewind=max_rewind, max_actions=max_actions,
             goal=goal, workers=workers, settle_margin=settle_margin,
             verbose=False, instance_id=attempts,
+            initial_emu_state=initial_emu_state, trace_path=trace_path,
+            trace_metadata=trace_metadata,
         )
         attempts += 1
         if path:
@@ -503,6 +545,9 @@ def _parse_args():
                    help="level_up: stop on level transition (default); game_clear: full clear")
     p.add_argument("--runs", type=int, default=1,
                    help="Number of winning traces to collect; loops the search (default: 1)")
+    p.add_argument("--initial-state", type=str,
+                   help="gzip savestate to use as every run's starting point; adjacent "
+                        "manifest.yaml metadata is copied into each trace")
     p.add_argument("--no-verbose", action="store_true", help="Suppress per-step search output")
     return p.parse_args()
 
@@ -545,11 +590,28 @@ def main():
         max_rewind=args.max_rewind, max_actions=args.max_actions, goal=args.goal,
         workers=args.workers, settle_margin=args.settle_margin,
     )
+    initial_state = trace_metadata = trace_dir = trace_stem = None
+    if args.initial_state:
+        initial_state, trace_metadata = load_initial_state(args.initial_state)
+        trace_dir = os.path.join(TRACE_DIR, "boss_level1")
+        state_name = os.path.splitext(os.path.basename(args.initial_state))[0]
+        trace_stem = "win_boss_level1_" + re.sub(r"[^a-zA-Z0-9_-]+", "_", state_name)
+        if verbose:
+            print(f"  Initial State:  {args.initial_state}")
     if args.runs <= 1:
-        _run_one_search(level=args.level, verbose=verbose, **common)
+        trace_path = None
+        if trace_dir is not None:
+            trace_path = os.path.join(
+                trace_dir, f"{trace_stem}_{time.strftime('%Y%m%d%H%M%S')}_i0.npz")
+        _run_one_search(
+            level=args.level, verbose=verbose, initial_emu_state=initial_state,
+            trace_path=trace_path, trace_metadata=trace_metadata, **common)
     else:
         # Multi-run logs concise "[iN] ..." lines, so per-step output is suppressed.
-        generate_traces(args.level, args.runs, **common)
+        generate_traces(
+            args.level, args.runs, initial_emu_state=initial_state,
+            trace_metadata=trace_metadata, trace_dir=trace_dir,
+            trace_stem=trace_stem, **common)
 
 
 if __name__ == "__main__":

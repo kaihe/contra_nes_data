@@ -1,7 +1,10 @@
+import gzip
+import hashlib
 import os
 
 import numpy as np
 import pytest
+import yaml
 
 from agent import mc_search
 from agent.sampler import ActionSampler
@@ -59,6 +62,31 @@ def test_search_can_start_from_supplied_savestate(tmp_path, monkeypatch):
     with np.load(trace_path, allow_pickle=True) as d:
         assert bytes(d["initial_state"]) == b"boss-state"
         assert str(d["src_trace"]) == "root.npz"
+
+
+def test_load_initial_state_checks_manifest_and_returns_lineage(tmp_path):
+    state_path = tmp_path / "partial_spread.state"
+    state = b"boss-state"
+    with gzip.open(state_path, "wb") as fh:
+        fh.write(state)
+    digest = hashlib.sha256(state).hexdigest()
+    manifest = {
+        "seed": 7,
+        "states": [{
+            "file": state_path.name, "state_sha256": digest,
+            "source_task": "train-task", "boss_hp_start": 32, "skip": 3,
+        }],
+    }
+    (tmp_path / "manifest.yaml").write_text(yaml.safe_dump(manifest))
+
+    loaded, metadata = mc_search.load_initial_state(str(state_path))
+
+    assert loaded == state
+    assert metadata["source_task"] == "train-task"
+    assert metadata["boss_hp_start"] == 32
+    assert metadata["state_bank_seed"] == 7
+    assert metadata["source_skip"] == 3
+    assert metadata["initial_state_sha256"] == digest
 
 
 class FakeEmulator:

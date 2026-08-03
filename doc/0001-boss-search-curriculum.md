@@ -5,12 +5,12 @@ Status: Proposed
 **Question.** How should level-1 boss demonstrations be diversified without
 changing the frozen validation set or losing the source-trace split boundary?
 
-**Answer.** Search from save-states replayed from the existing 466 train boss
-tasks. Select a source task first, use its reveal state 30% of the time and a
-uniform decision offset within its fight 70% of the time, and optimize boss HP
-damage with forward-scroll reward disabled during the boss scene. Save each win
-as an additive raw trace and replayable boss task whose `src_trace` and `split`
-remain those of the original train example. Never sample or rewrite validation.
+**Answer.** First materialize a small, reproducible bank of train-derived boss
+savestates, then run ordinary `mc_search` directly from those files. The bank
+contains full and partial starts for each observed weapon class and records the
+root task, split, offset, HP, loadout and checksum in a manifest. This makes the
+starting conditions inspectable and reusable before any larger additive task
+generation is approved. Never sample or rewrite validation.
 
 ---
 
@@ -31,6 +31,17 @@ unchanged.
 ## 2. The design
 
 ### Sampling and provenance
+
+The first-stage bank lives in `src/agent/states/boss_level1/`, matching the
+gzip-compressed format used by the per-level Spread states. For each observed
+weapon class, the median-length train source contributes its reveal state and
+one seeded post-reveal partial state. `mc_search --initial-state FILE` loads the
+state, verifies its manifest checksum, and copies its lineage metadata into the
+raw winning trace under `game_trace/mc_trace/boss_level1/`.
+
+This fixed bank is the default experiment surface. The broader randomized
+curriculum below remains available as a later scaling mechanism, after results
+from the fixed starts justify it.
 
 The input unit is an existing `boss_level1` task, not an arbitrary frame pooled
 across all tasks. Inputs with `split != "train"` are rejected before sampling.
@@ -117,13 +128,28 @@ evaluation comparisons. New tasks are additive and train-only.
 2. Generalize `mc_search` to accept a supplied initial state without changing
    its default level-start behavior.
 3. Add the train-only boss sampling/generation driver and provenance tests.
-4. Run a small replay-verified pilot; inspect win rate and diversity.
-5. For `k=1`, run the deterministic resumable batch schedule: every one of the
+4. Build the fixed state bank and run `mc_search` once from every bank entry;
+   inspect win rate, latency and diversity.
+5. Only after accepting that pilot, optionally run the deterministic resumable
+   `k=1` batch schedule: every one of the
    466 sources once at offset zero plus 1,087 trace-first partial requests, for
    1,553 new tasks at the accepted 30/70 mix. Partition by global request ID when
    running concurrent shards.
 6. Export the accepted batch, then hand the new shard/API contract to policy
    through a GitHub issue.
+
+## 6. Execution update (2026-08-03)
+
+The initial `k=1` batch was stopped after 59 completed full-fight outputs. Those
+trace/task pairs remain preserved, but no further bulk requests are running.
+The experiment pivoted to the fixed state bank above because it gives direct,
+repeatable `mc_search` starting points and makes search behavior measurable
+before committing compute to 1,553 requests.
+
+The bank contains eight states: full and partial starts for Flamethrower, Laser,
+Regular and Spread. In the first smoke matrix, all four partial starts and three
+of four full starts produced saved wins within a 90-second per-search budget;
+full Flamethrower did not win in that cap. Successful searches took 8–78 seconds.
 
 ## Appendix — provenance
 
