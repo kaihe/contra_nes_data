@@ -49,6 +49,16 @@ class BossStart:
     start_x: int
 
 
+@dataclass(frozen=True)
+class BatchRequest:
+    """One deterministic request in a resumable generation batch."""
+
+    request_id: int
+    source_path: str
+    full: bool
+    start_seed: int
+
+
 def train_sources(pattern: str = DEFAULT_SOURCES) -> list[str]:
     """Return boss task paths that explicitly belong to the train split.
 
@@ -149,6 +159,125 @@ def capture_start(source_path: str, *, full: bool,
 def _uid(start: BossStart, batch: str, attempt: int) -> str:
     return (f"{start.source.uid}__bosssearch_{batch}_"
             f"o{start.offset:04d}_i{attempt:04d}")
+
+
+def batch_requests(paths: list[str], *, full_per_source: int,
+                   partial_runs: int, seed: int, num_shards: int = 1,
+                   shard_index: int = 0) -> list[BatchRequest]:
+    """Build an exact, deterministic full/partial schedule for one shard.
+
+    Every source appears exactly ``full_per_source`` times in the full bucket.
+    Partial sources are sampled trace-first with replacement. Global request IDs
+    are partitioned modulo ``num_shards``, so independently running shards are
+    disjoint and their union is the unsharded schedule.
+    """
+    if full_per_source < 0 or partial_runs < 0:
+        raise ValueError("batch request counts cannot be negative")
+    if num_shards < 1 or not 0 <= shard_index < num_shards:
+        raise ValueError("shard_index must be in [0, num_shards)")
+    if not paths:
+        raise ValueError("at least one train source is required")
+
+    ordered = sorted(paths)
+    all_requests = []
+    request_id = 0
+    for _ in range(full_per_source):
+        for source_path in ordered:
+            start_seed = int(np.random.SeedSequence([seed, request_id, 0]).generate_state(1)[0])
+            all_requests.append(BatchRequest(request_id, source_path, True, start_seed))
+            request_id += 1
+
+    source_rng = np.random.default_rng(seed)
+    for _ in range(partial_runs):
+        source_path = ordered[int(source_rng.integers(len(ordered)))]
+        start_seed = int(np.random.SeedSequence([seed, request_id, 1]).generate_state(1)[0])
+        all_requests.append(BatchRequest(request_id, source_path, False, start_seed))
+        request_id += 1
+    return [r for r in all_requests if r.request_id % num_shards == shard_index]
+
+
+def generate_batch(requests: list[BatchRequest], *, batch_id: str,
+                   trace_out: str = DEFAULT_TRACE_OUT,
+                   task_out: str = DEFAULT_TASK_OUT, rollouts: int = 64,
+                   rollout_len: int = 48, settle_margin: int = 16,
+                   max_time: int = 600, max_rewind: int = 30,
+                   max_actions: int = 1000, workers: int | None = None,
+                   attempts_per_request: int = 3, min_remaining: int = 8,
+                   rebuild_manifest: bool = True) -> tuple[int, int, list[int]]:
+    """Run a deterministic, resumable batch.
+
+    Returns ``(written, skipped, failed_request_ids)``. A task whose stable UID
+    already exists is skipped, so the same command safely resumes an interrupted
+    shard. Each request keeps the same sampled start across retries.
+    """
+    if attempts_per_request < 1:
+        raise ValueError("attempts_per_request must be positive")
+    workers = workers or os.cpu_count() or 1
+    written = skipped = 0
+    failed = []
+    total = len(requests)
+
+    for position, request in enumerate(requests, 1):
+        start = capture_start(
+            request.source_path, full=request.full,
+            rng=np.random.default_rng(request.start_seed),
+            min_remaining=min_remaining,
+        )
+        uid = (f"{start.source.uid}__bosssearch_{batch_id}_"
+               f"r{request.request_id:05d}_o{start.offset:04d}")
+        task_path = os.path.join(task_out, start.source.label, uid + ".npz")
+        trace_path = os.path.join(trace_out, uid + ".npz")
+        if os.path.exists(task_path) and os.path.exists(trace_path):
+            skipped += 1
+            print(f"[{position}/{total}] skip existing r{request.request_id:05d}",
+                  flush=True)
+            continue
+
+        metadata = {
+            "batch_id": batch_id,
+            "batch_request_id": request.request_id,
+            "source_task": start.source.uid,
+            "src_trace": start.source.src_trace,
+            "split": "train",
+            "source_offset": start.offset,
+            "offset_frac": start.offset_frac,
+            "boss_hp_start": start.boss_hp_start,
+            "weapon": start.weapon,
+            "rapid": start.rapid,
+        }
+        print(f"[{position}/{total}] r{request.request_id:05d} "
+              f"{'full' if request.full else 'partial'} {start.source.uid} "
+              f"offset={start.offset} hp={start.boss_hp_start}", flush=True)
+        won = None
+        for retry in range(attempts_per_request):
+            instance_id = request.request_id * attempts_per_request + retry
+            won = _run_one_search(
+                level=start.source.level + 1,
+                rollouts=rollouts, rollout_len=rollout_len,
+                max_time=max_time, max_rewind=max_rewind,
+                max_actions=max_actions, goal="level_up", workers=workers,
+                settle_margin=settle_margin, verbose=False,
+                instance_id=instance_id,
+                initial_emu_state=start.initial_state, trace_path=trace_path,
+                trace_metadata=metadata,
+            )
+            if won is not None:
+                break
+        if won is None:
+            failed.append(request.request_id)
+            print(f"  FAILED after {attempts_per_request} attempts", flush=True)
+            continue
+        seg = task_from_trace(won, start, uid)
+        seg.meta["batch_id"] = batch_id
+        seg.meta["batch_request_id"] = request.request_id
+        write_segment(seg, task_out)
+        written += 1
+        print(f"  WIN {len(seg.actions)} decisions -> {task_path}", flush=True)
+
+    if rebuild_manifest:
+        build_manifest(task_out)
+    print(f"batch {batch_id}: written={written} skipped={skipped} failed={len(failed)}")
+    return written, skipped, failed
 
 
 def task_from_trace(trace_path: str, start: BossStart, uid: str) -> Segment:
@@ -278,12 +407,41 @@ def _parse_args(argv=None):
     p.add_argument("--max-attempts", type=int, default=None)
     p.add_argument("--min-remaining", type=int, default=8,
                    help="minimum source decisions left for a partial start")
+    p.add_argument("--full-per-source", type=int, default=None,
+                   help="exact full-start wins per source; enables batch mode")
+    p.add_argument("--partial-runs", type=int, default=0,
+                   help="exact partial-start wins in batch mode")
+    p.add_argument("--batch-id", default="issue2-k1")
+    p.add_argument("--num-shards", type=int, default=1)
+    p.add_argument("--shard-index", type=int, default=0)
+    p.add_argument("--attempts-per-request", type=int, default=3)
+    p.add_argument("--no-manifest", action="store_true",
+                   help="skip manifest rebuild (use for concurrently running shards)")
     return p.parse_args(argv)
 
 
 def main(argv=None):
     args = _parse_args(argv)
     paths = train_sources(args.sources)
+    if args.full_per_source is not None:
+        requests = batch_requests(
+            paths, full_per_source=args.full_per_source,
+            partial_runs=args.partial_runs, seed=args.seed,
+            num_shards=args.num_shards, shard_index=args.shard_index,
+        )
+        _, _, failed = generate_batch(
+            requests, batch_id=args.batch_id, trace_out=args.trace_out,
+            task_out=args.task_out, rollouts=args.rollouts,
+            rollout_len=args.rollout_len, settle_margin=args.settle_margin,
+            max_time=args.max_time, max_rewind=args.max_rewind,
+            max_actions=args.max_actions, workers=args.workers,
+            attempts_per_request=args.attempts_per_request,
+            min_remaining=args.min_remaining,
+            rebuild_manifest=not args.no_manifest,
+        )
+        if failed:
+            raise SystemExit(f"failed batch request IDs: {failed}")
+        return
     generate(
         paths, args.runs, full_fraction=args.full_fraction, seed=args.seed,
         trace_out=args.trace_out, task_out=args.task_out,

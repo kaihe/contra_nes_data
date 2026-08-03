@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from agent import reward
-from agent.boss_search import capture_start, train_sources
+from agent.boss_search import batch_requests, capture_start, train_sources
 from agent.mc_search import SearchEffort, save_trace
 from env.constant import (ADDR_ENEMY_HP, ADDR_ENEMY_TYPE, ADDR_LEVEL,
                           ADDR_WEAPON)
@@ -80,6 +80,22 @@ def test_train_sources_rejects_validation_and_other_labels(tmp_path):
     _minimal_task(tmp_path / "derived.npz", split="train", source_task="train")
 
     assert train_sources(str(tmp_path / "*.npz")) == [str(tmp_path / "train.npz")]
+
+
+def test_batch_schedule_covers_every_full_source_and_shards_are_disjoint():
+    paths = ["c.npz", "a.npz", "b.npz"]
+    whole = batch_requests(paths, full_per_source=1, partial_runs=7, seed=9)
+    shards = [batch_requests(paths, full_per_source=1, partial_runs=7, seed=9,
+                             num_shards=4, shard_index=i) for i in range(4)]
+
+    assert len(whole) == 10
+    assert [r.source_path for r in whole[:3]] == sorted(paths)
+    assert all(r.full for r in whole[:3])
+    assert not any(r.full for r in whole[3:])
+    assert {r.request_id for r in whole} == {
+        r.request_id for shard in shards for r in shard
+    }
+    assert sum(len(shard) for shard in shards) == len(whole)
 
 
 def test_save_trace_metadata_round_trip_and_reserved_keys(tmp_path):

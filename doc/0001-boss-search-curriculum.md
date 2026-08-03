@@ -118,8 +118,12 @@ evaluation comparisons. New tasks are additive and train-only.
    its default level-start behavior.
 3. Add the train-only boss sampling/generation driver and provenance tests.
 4. Run a small replay-verified pilot; inspect win rate and diversity.
-5. Generate and export the accepted batch, then hand the new shard/API contract
-   to policy through a GitHub issue.
+5. For `k=1`, run the deterministic resumable batch schedule: every one of the
+   466 sources once at offset zero plus 1,087 trace-first partial requests, for
+   1,553 new tasks at the accepted 30/70 mix. Partition by global request ID when
+   running concurrent shards.
+6. Export the accepted batch, then hand the new shard/API contract to policy
+   through a GitHub issue.
 
 ## Appendix — provenance
 
