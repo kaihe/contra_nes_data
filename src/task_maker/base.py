@@ -9,6 +9,7 @@ it. Task-specific fields live in ``meta`` so the on-disk format stays uniform.
 import argparse
 import csv
 import glob
+import hashlib
 import inspect
 import os
 from collections import Counter
@@ -20,6 +21,27 @@ from env.entity import (ADDR_ENEMY_ROUTINE, ADDR_ENEMY_TYPE, ADDR_ENEMY_X,
                         ADDR_ENEMY_Y, ADDR_PLAYER_X, ADDR_PLAYER_Y,
                         ENEMY_TYPE_BULLET, N_SLOTS, on_screen, overlay_pointers)
 from util.replay import SKIP, make_env, rewind_state
+
+
+# ── Train / val split ─────────────────────────────────────────────────────────
+
+VAL_PCT = 10          # target share of *source traces* held out
+
+
+def split_of(src_trace: str, val_pct: int = VAL_PCT) -> str:
+    """Which half a task belongs to, decided by its **source trace**.
+
+    The split is a property of the dataset, owned here, because it has to be a
+    property of the *trace*: one trace yields 10–24 overlapping tasks, so any
+    split drawn over episodes scatters siblings across both halves and a val task
+    ends up sharing frames with a train task cut from the same replay.
+
+    Hashing the name (rather than permuting the file list) makes the assignment
+    stable under regeneration: adding, removing or reordering traces never
+    reassigns the ones already there.
+    """
+    h = int(hashlib.sha1(src_trace.encode()).hexdigest(), 16)
+    return "val" if h % 100 < val_pct else "train"
 
 
 # ── Common segment ────────────────────────────────────────────────────────────
@@ -36,6 +58,11 @@ class Segment:
     src_trace: str              # originating trace filename
     uid: str                    # unique filename stem within the label directory
     meta: dict = field(default_factory=dict)   # task-specific extras (enemy_type, slot, …)
+    split: str = ""             # "train" / "val"; derived from src_trace when blank
+
+    def __post_init__(self):
+        if not self.split:
+            self.split = split_of(self.src_trace)
 
     @property
     def window_len(self) -> int:
@@ -180,7 +207,7 @@ def render_goal(seg: "Segment", *, sigma: float = 12.0, max_seek: int = 8,
 
 # ── Writing ───────────────────────────────────────────────────────────────────
 
-_MANIFEST_FIELDS = ["file", "label", "start_step", "end_step", "window_len",
+_MANIFEST_FIELDS = ["file", "label", "split", "start_step", "end_step", "window_len",
                     "start_x", "end_x", "target_entity", "source_entity"]
 
 
@@ -199,13 +226,14 @@ def write_segment(seg: Segment, out_root: str) -> str:
         start_step=seg.start_step,
         end_step=seg.end_step,
         src_trace=seg.src_trace,
+        split=seg.split,
         **seg.meta,
     )
     return path
 
 
 _SEG_FIELDS = {"actions", "initial_state", "label", "level", "skip",
-               "start_step", "end_step", "src_trace"}
+               "start_step", "end_step", "src_trace", "split"}
 
 
 def load_task(path: str) -> Segment:
@@ -229,6 +257,8 @@ def load_task(path: str) -> Segment:
         src_trace=str(d["src_trace"]),
         uid=os.path.splitext(os.path.basename(path))[0],
         meta=meta,
+        # tasks written before the split existed fall back to the derived value
+        split=str(d["split"]) if "split" in d.files else "",
     )
 
 
@@ -238,7 +268,8 @@ def build_manifest(out_root: str) -> tuple[str, int]:
     The manifest is a *derived index* — the ``.npz`` files are the source of
     truth — so this is idempotent and never loses tasks from earlier runs: any
     run just adds ``.npz`` files, and rebuilding reflects everything on disk. It
-    carries a small summary per task (see ``_MANIFEST_FIELDS``); the full metadata
+    carries a small summary per task (see ``_MANIFEST_FIELDS``), including the
+    train/val ``split`` inherited from the task's source trace; the full metadata
     lives in each ``.npz``. Task-specific columns are blank where they don't apply
     (``target_entity`` for kills, ``source_entity`` for items). Only these scalars
     are read — the big ``actions`` / ``initial_state`` arrays are never decompressed.
@@ -257,6 +288,7 @@ def build_manifest(out_root: str) -> tuple[str, int]:
         rows.append({
             "file": path,   # path relative to the cwd, e.g. game_trace/tasks/kill/red_turret/xxx.npz
             "label": str(d["label"]),
+            "split": val("split") or split_of(str(d["src_trace"])),
             "start_step": start,
             "end_step": end,
             "window_len": end - start + 1,
@@ -345,6 +377,7 @@ class TaskMaker:
         out_root = out_root or self.default_out
         os.makedirs(out_root, exist_ok=True)
         kept: Counter = Counter()
+        by_split: Counter = Counter()   # keyed by (label, split)
         rejected: Counter = Counter()   # keyed by reason
         empty = 0
 
@@ -358,6 +391,7 @@ class TaskMaker:
                     continue
                 write_segment(seg, out_root)
                 kept[seg.label] += 1
+                by_split[(seg.label, seg.split)] += 1
             print(f"  [{i}/{len(files)}] {os.path.basename(f)}: "
                   f"{len(segs)} segments  (kept {sum(kept.values())})")
 
@@ -366,8 +400,11 @@ class TaskMaker:
               f"{total} total on disk → {out_root}/manifest.csv")
         if empty:
             print(f"    ({empty} traces produced no segments)")
+        print(f"    {'label':<24} {'total':>6} {'train':>6} {'val':>6}")
         for label, n in kept.most_common():
-            print(f"    {label:<24} {n}")
+            tr, va = by_split[(label, "train")], by_split[(label, "val")]
+            flag = "   <- empty on one side" if not tr or not va else ""
+            print(f"    {label:<24} {n:>6} {tr:>6} {va:>6}{flag}")
         if rejected:
             print("  rejected: "
                   + ", ".join(f"{r}={c}" for r, c in rejected.most_common()))

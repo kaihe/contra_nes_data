@@ -1,0 +1,55 @@
+# Level 1 search config — action table, button costs, and action prior.
+# Loaded by agent/sampler.py (load_for_level); levels without a file fall back
+# to baseline.yaml with default costs and a uniform prior.
+#
+# The table is a trimmed subset of baseline.yaml curated from the combo
+# histogram of winning Level 1 traces. Level 1 is a "forward" side-scroll level:
+# run right, aim up/diagonal to shoot, jump gaps, drop prone (D) to fire low,
+# step left to dodge. The baseline's directional-jump noise (UJ, DJ, ULJ, UL,
+# LJ) is dropped — those appear only a handful of times in 63k frames of wins,
+# i.e. search noise, not strategy. RJ/J (gap jumps) and L/LF (dodge-back) are
+# kept despite being rare because they are tactically necessary.
+#
+# Bit order: [B, NULL, SELECT, START, UP, DOWN, LEFT, RIGHT, A] (B = fire,
+# A = jump). skip must match util/replay.py SKIP or traces won't reproduce.
+skip: 3
+actions:
+  _:   [0, 0, 0, 0, 0, 0, 0, 0, 0]
+  R:   [0, 0, 0, 0, 0, 0, 0, 1, 0]
+  RF:  [1, 0, 0, 0, 0, 0, 0, 1, 0]
+  RJ:  [0, 0, 0, 0, 0, 0, 0, 1, 1]
+  UR:  [0, 0, 0, 0, 1, 0, 0, 1, 0]
+  URF: [1, 0, 0, 0, 1, 0, 0, 1, 0]
+  URJ: [0, 0, 0, 0, 1, 0, 0, 1, 1]
+  U:   [0, 0, 0, 0, 1, 0, 0, 0, 0]
+  UF:  [1, 0, 0, 0, 1, 0, 0, 0, 0]
+  F:   [1, 0, 0, 0, 0, 0, 0, 0, 0]
+  J:   [0, 0, 0, 0, 0, 0, 0, 0, 1]
+  D:   [0, 0, 0, 0, 0, 1, 0, 0, 0]
+  DF:  [1, 0, 0, 0, 0, 1, 0, 0, 0]
+  L:   [0, 0, 0, 0, 0, 0, 1, 0, 0]
+  LF:  [1, 0, 0, 0, 0, 0, 1, 0, 0]
+
+# Per-button hold penalties, charged once per step a button is held
+# (agent/reward.py press_penalty). Right (forward) is the canonical action and
+# stays free; every other button pays a small tie-break cost so that among
+# reward-equivalent actions the search commits the simplest one, giving a
+# consistent state->action label instead of an arbitrary R-vs-UR coin flip.
+#
+# Magnitude is kept far below the smallest real reward (a landed shot is
+# enemy_hp=1.0, a death is -15, a step of progress ~0.1/px) so these costs only
+# ever break ties — never veto a jump/fire/dodge that actually earns reward.
+# Inert presses (held fire, airborne jump) are already removed structurally by
+# the sampler's mask (action_mask.py), so these act purely as tie-breaks.
+costs:
+  F: -0.02   # fire (B)
+  J: -0.02   # jump (A)
+  U: -0.02   # up
+  D: -0.02   # down
+  L: -0.02   # left
+  # R omitted -> 0: forward is the canonical action, never penalised
+
+prior:
+  traces: "game_trace/mc_trace/level1/*.npz"  # glob, relative to the repo root
+  mode: bigram     # bigram = P(next|prev) ; unigram = marginal P(action)
+  smooth: 0.0      # blend toward uniform in [0,1]; keeps rare actions explorable

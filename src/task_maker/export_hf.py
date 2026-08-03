@@ -8,14 +8,21 @@ self-contained, ROM-free sample into a WebDataset tar shard:
     <uid>.actions.npy (T, 9) uint8 button vectors, aligned to the frames
     <uid>.goal.png    the ROCKET goal frame (reference image + colored blob)
     <uid>.json        meta: goal_when/kind, goal points, per-frame centroids +
-                      visibility (the ROCKET-2 aux targets), label, start/end x, …
+                      visibility (the ROCKET-2 aux targets), per-class entity
+                      positions (``entities``), label, split, start/end x, …
 
-One config per task type (kill / item / traverse / boss). A WebDataset shard is just
-a tar of these grouped members, so no loading script is needed on the Hub — declare
-the configs in the dataset card's ``README.md``.
+One config per task type (kill / item / traverse / boss), and **one shard per split**
+within each config — ``kill-train-00000.tar`` / ``kill-val-00000.tar``. The split is
+owned by the dataset (:func:`task_maker.base.split_of`, keyed on the source trace),
+so a consumer points at the shard it wants instead of reconstructing a permutation.
+A WebDataset shard is just a tar of these grouped members, so no loading script is
+needed on the Hub — declare the configs in the dataset card's ``README.md``.
 
     # 50-episode proof shard for one config, measure real bytes/episode
     python -m task_maker.export_hf --config kill --limit 50 --out tmp/hf_export
+
+    # just the held-out half of one config
+    python -m task_maker.export_hf --config kill --split val --out game_trace/hf
 
 The ``.npz`` files stay the source of truth; these shards are a materialization.
 """
@@ -36,9 +43,10 @@ warnings.filterwarnings("ignore", message=".*Gym.*")
 import imageio.v2 as imageio
 
 from env.entity import (ADDR_ENEMY_ROUTINE, ADDR_ENEMY_X, ADDR_ENEMY_Y,
-                        ADDR_PLAYER_X, ADDR_PLAYER_Y, on_screen, overlay_pointers)
+                        ADDR_PLAYER_X, ADDR_PLAYER_Y, HEATMAP_CLASSES, on_screen,
+                        overlay_pointers, scan)
 from env.ground import left_edge
-from task_maker.base import _boss_parts, load_task
+from task_maker.base import _boss_parts, load_task, split_of
 from util.replay import make_env, rewind_state
 
 CONFIG_GLOB = {
@@ -47,6 +55,29 @@ CONFIG_GLOB = {
     "traverse": "game_trace/tasks/traverse/*/*.npz",
     "boss":     "game_trace/tasks/boss/*/*.npz",
 }
+
+
+def _xy_list(pts) -> list[list[int]]:
+    """``(2,)`` / ``(n, 2)`` array or iterable of pairs → ``[[x, y], ...]``."""
+    arr = np.asarray(pts)
+    if arr.size == 0:
+        return []
+    if arr.ndim == 1:
+        return [[int(arr[0]), int(arr[1])]]
+    return [[int(x), int(y)] for x, y in arr.reshape(-1, 2)]
+
+
+def entities_frame(ram) -> dict[str, list[list[int]]]:
+    """One frame of per-class entity positions (PPU coords), same convention as
+    ``centroids``. Always includes every :data:`HEATMAP_CLASSES` key; an empty
+    list means none of that class is live this frame."""
+    e = scan(ram)
+    return {
+        "player": _xy_list(e.player),
+        "player_bullets": _xy_list(e.player_bullets),
+        "enemies": _xy_list(e.enemies),
+        "enemy_bullets": _xy_list(e.enemy_bullets),
+    }
 
 
 def _goal_points(seg, ram):
@@ -74,6 +105,8 @@ def materialize(seg, *, sigma=12.0):
     env = make_env()
     rewind_state(env, seg.initial_state)
     frames, centroids, visibility = [], [], []
+    # Per-class lists of length T; each entry is [[x,y], ...] for that frame.
+    entities = {c: [] for c in HEATMAP_CLASSES}
     first_idx, boss_best = None, (-1, None)
     try:
         for i, act in enumerate(seg.actions):
@@ -81,10 +114,14 @@ def materialize(seg, *, sigma=12.0):
             for _ in range(seg.skip):
                 env.step(a)
             ram = env.unwrapped.get_ram()
+            # Screen + labels share this post-action RAM snapshot (same as
+            # centroids). Do not align entities to the pre-step action index.
             frames.append(np.ascontiguousarray(env.unwrapped.get_screen()))
             pts, vis = _goal_points(seg, ram)
             centroids.append([[int(x), int(y)] for x, y in pts])
             visibility.append(bool(vis))
+            for cls, pts_cls in entities_frame(ram).items():
+                entities[cls].append(pts_cls)
             if when == "first" and first_idx is None and pts:
                 first_idx = i
             if when == "boss" and len(pts) > boss_best[0]:
@@ -108,7 +145,37 @@ def materialize(seg, *, sigma=12.0):
         "goal_frame_idx": gidx,
         "centroids": centroids,
         "visibility": visibility,
+        "entities": entities,
     }
+
+
+def verify_entities_vs_centroids(centroids, visibility, entities, *,
+                                 goal_when=None) -> tuple[int, int]:
+    """Check that each visible goal centroid appears in an enemy-slot class.
+
+    Kill / item / boss goals read an enemy-array slot. ``scan`` splits that array
+    into ``enemies`` vs ``enemy_bullets`` by ``ENEMY_TYPE``, and a few item frames
+    briefly hold type ``0x01`` (bullet) during slot turnover — so the check
+    accepts either class. Traverse goals (``goal_when == "last"``) are projected
+    world landmarks, not live entities, and are skipped.
+
+    Returns ``(checked, mismatches)``.
+    """
+    if goal_when == "last":
+        return 0, 0
+
+    checked = mismatches = 0
+    for j, vis in enumerate(visibility):
+        if not vis:
+            continue
+        # Enemy-array slots only (not player / player_bullets).
+        live = {tuple(p) for p in entities["enemies"][j]}
+        live.update(tuple(p) for p in entities["enemy_bullets"][j])
+        for pt in centroids[j]:
+            checked += 1
+            if tuple(pt) not in live:
+                mismatches += 1
+    return checked, mismatches
 
 
 # ── Encoding helpers ──────────────────────────────────────────────────────────
@@ -159,12 +226,14 @@ def _add(tar, name, data):
 
 
 _META_PASSTHROUGH = ("target_entity", "source_entity", "item_weapon", "kind",
-                     "start_seg", "end_seg")
+                     "start_seg", "end_seg", "weapon", "rapid",
+                     "boss_hp_start", "offset_frac")
 
 
-def write_shard(paths, out_tar, *, codec="ffv1", sigma=12.0):
+def write_shard(paths, out_tar, *, codec="ffv1", sigma=12.0, verify=True):
     os.makedirs(os.path.dirname(out_tar) or ".", exist_ok=True)
     n = total_frames = 0
+    ver_checked = ver_bad = 0
     with tarfile.open(out_tar, "w") as tar:
         for p in paths:
             seg = load_task(p)
@@ -173,14 +242,23 @@ def write_shard(paths, out_tar, *, codec="ffv1", sigma=12.0):
             vid, ext = _encode_video(m["frames"], codec)
             meta = {
                 "uid": uid, "label": seg.label, "level": seg.level,
+                "split": seg.split, "src_trace": seg.src_trace,
                 "goal_when": seg.meta.get("goal_when"),
                 "goal_kind": seg.meta.get("goal_kind"),
                 "goal_points": m["goal_points"], "goal_frame_idx": m["goal_frame_idx"],
                 "window_len": len(m["frames"]),
                 "start_x": seg.meta.get("start_x"), "end_x": seg.meta.get("end_x"),
                 "centroids": m["centroids"], "visibility": m["visibility"],
+                "entities": m["entities"],
                 **{k: seg.meta[k] for k in _META_PASSTHROUGH if k in seg.meta},
             }
+            if verify:
+                c, bad = verify_entities_vs_centroids(
+                    m["centroids"], m["visibility"], m["entities"],
+                    goal_when=seg.meta.get("goal_when"),
+                )
+                ver_checked += c
+                ver_bad += bad
             _add(tar, f"{uid}.obs.{ext}", vid)
             _add(tar, f"{uid}.actions.npy", _npy_bytes(m["actions"]))
             _add(tar, f"{uid}.goal.png", _png_bytes(m["goal_img"]))
@@ -193,7 +271,22 @@ def write_shard(paths, out_tar, *, codec="ffv1", sigma=12.0):
     print(f"\nshard {out_tar}")
     print(f"  {n} episodes, {total_frames} frames, {size/1e6:.1f} MB  "
           f"({size/n/1e3:.1f} KB/episode, {size/total_frames:.0f} B/frame)")
+    if verify:
+        print(f"  entities vs centroids: checked={ver_checked} mismatches={ver_bad}")
+        if ver_bad:
+            raise RuntimeError(
+                f"entities/centroids disagree on {ver_bad}/{ver_checked} visible "
+                f"goal points — export aborted"
+            )
     return size, n, total_frames
+
+
+def read_split(path: str) -> str:
+    """The train/val split of a task ``.npz``, read without decompressing its arrays."""
+    d = np.load(path, allow_pickle=True)
+    if "split" in d.files:
+        return str(d["split"])
+    return split_of(str(d["src_trace"]))
 
 
 def main():
@@ -201,7 +294,10 @@ def main():
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--config", choices=list(CONFIG_GLOB), default="kill",
                    help="which task type to export")
-    p.add_argument("--limit", type=int, default=None, help="max episodes (proof shards)")
+    p.add_argument("--split", choices=["train", "val", "all"], default="all",
+                   help="which split(s) to export; 'all' writes one shard per split")
+    p.add_argument("--limit", type=int, default=None,
+                   help="max episodes per shard (proof shards)")
     p.add_argument("--codec", choices=["png", "ffv1", "h264"], default="png",
                    help="obs video codec: png (lossless, default), ffv1 (lossless), "
                         "h264 (lossy, smallest — the ROCKET-2/VPT choice)")
@@ -210,13 +306,28 @@ def main():
     args = p.parse_args()
 
     paths = sorted(glob.glob(CONFIG_GLOB[args.config]))
-    if args.limit:
-        paths = paths[:args.limit]
     if not paths:
         raise SystemExit(f"no tasks for config {args.config!r}")
-    out_tar = os.path.join(args.out, f"{args.config}-00000.tar")
-    print(f"exporting {len(paths)} {args.config} episodes → {out_tar} (codec={args.codec})")
-    write_shard(paths, out_tar, codec=args.codec, sigma=args.sigma)
+
+    # one shard per split: the split lives in the .npz, so grouping is a cheap
+    # metadata read — no permutation to reconstruct downstream
+    wanted = ["train", "val"] if args.split == "all" else [args.split]
+    groups = {s: [] for s in wanted}
+    for path in paths:
+        s = read_split(path)
+        if s in groups:
+            groups[s].append(path)
+
+    for split, group in groups.items():
+        if args.limit:
+            group = group[:args.limit]
+        if not group:
+            print(f"\n!! no {args.config} tasks in split {split!r} — no shard written")
+            continue
+        out_tar = os.path.join(args.out, f"{args.config}-{split}-00000.tar")
+        print(f"\nexporting {len(group)} {args.config}/{split} episodes → {out_tar} "
+              f"(codec={args.codec})")
+        write_shard(group, out_tar, codec=args.codec, sigma=args.sigma)
 
 
 if __name__ == "__main__":

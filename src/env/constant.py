@@ -112,6 +112,9 @@ BOSS_ENEMY_TYPES_BY_LEVEL = {
 # 0-indexed levels whose boss room does not auto-scroll into view (indoor bases).
 INSIDE_LEVELS = {1, 3}
 
+# 0-indexed levels the player climbs rather than walks through (waterfall).
+UP_LEVELS = {2}
+
 
 def enemy_name(etype: int, level: int | None = None) -> str:
     """Normalised task-label name for an enemy type, e.g. 0x03 -> 'flying_capsule'.

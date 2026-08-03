@@ -38,6 +38,8 @@ from env.event import EventType, all_events
 GAME = "Contra-Nes"
 SKIP = ACTION_SPACE.skip   # NES frames per decision (fallback if trace omits it)
 FPS  = round(60 / SKIP)    # logical fps for saved video (= 60 NES fps / SKIP)
+# stable_retro ships Contra-Nes (rom + Level1-8 states) in its EXPERIMENTAL set.
+INTTYPE = retro.data.Integrations.EXPERIMENTAL_ONLY
 
 # Every event to scan each step (all levels; kill events self-guard by level).
 EVENTS = all_events()
@@ -52,7 +54,7 @@ def make_env():
         use_restricted_actions=retro.Actions.ALL,
         obs_type=retro.Observations.IMAGE,
         render_mode=None,
-        inttype=retro.data.Integrations.EXPERIMENTAL_ONLY,  # ships Contra-Nes + rom
+        inttype=INTTYPE,
     )
     env.reset()
     return env
@@ -61,6 +63,17 @@ def make_env():
 def rewind_state(env, emu_state: bytes) -> None:
     env.em.set_state(emu_state)
     env.data.update_ram()
+
+
+def step_env(env, act: np.ndarray, skip: int = SKIP) -> None:
+    """Hold `act` for `skip` NES frames — one decision, no frames collected.
+
+    The unit of a decision for mc_search and for the replay loop below; both must
+    use the same `skip` or a searched trace won't reproduce.
+    """
+    act = np.asarray(act, dtype=np.uint8)
+    for _ in range(skip):
+        env.step(act.copy())
 
 
 def save_video(frames: np.ndarray, path: str) -> None:

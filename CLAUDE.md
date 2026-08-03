@@ -15,3 +15,9 @@
 If an output exists to help us *understand or design* (a chart, a probe, a stat
 dump), it belongs in `tmp/`. If it's *product* (a task dataset, reusable code), it
 belongs in `game_trace/` or `src/`.
+
+## Cross-repo work
+Coordinate with `contra_nes_policy` and `contra_nes_evaluation` via **GitHub
+issues** on the target repo (skill: `contra-nes-handoff`). Do not leave long
+handoffs only in chat. File work where it must be done; open a consumer issue
+when shards/API are ready for the other side.

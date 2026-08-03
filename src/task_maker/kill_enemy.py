@@ -33,7 +33,6 @@ from env.constant import (
     enemy_name,
 )
 from env.entity import ADDR_ENEMY_ROUTINE, ADDR_ENEMY_X, ADDR_ENEMY_Y, on_screen, player_x
-from env.event import KillEvent
 from env.utility import boss_scene
 from task_maker.base import (
     Segment,
@@ -167,10 +166,21 @@ def extract_segments(trace_path: str, *, min_window: int = 2,
 
 
 def kill_reached(seg: Segment, pre, cur) -> bool:
-    """Goal predicate: the target enemy dies on this step (its kill event fires)."""
-    etype = seg.meta["enemy_type"]
-    ev = KillEvent(etype, level=seg.level if etype > 0x0F else None)
-    return bool(ev.trigger(pre, cur))
+    """Goal predicate: **the pinned enemy** dies on this step — the slot at
+    ``meta["slot"]`` has its HP cross to 0.
+
+    Pinning the slot, not the type, is what makes the predicate agree with what the
+    task actually asks for: the goal frame blobs one specific slot and the ROCKET-2
+    aux targets follow that slot's position, so killing a *different* enemy of the
+    same type is not the demonstrated task. Several ``flying_capsule``s are routinely
+    on screen at once, which a type-level :class:`KillEvent` cannot tell apart.
+    :func:`kill_predates_window` already pins the slot the same way.
+
+    The level guard that :class:`KillEvent` needed (types 0x10+ are reused across
+    levels) is moot here — a slot index is unambiguous on its own.
+    """
+    slot = seg.meta["slot"]
+    return int(pre[ADDR_ENEMY_HP + slot]) > 0 and int(cur[ADDR_ENEMY_HP + slot]) == 0
 
 
 def kill_predates_window(seg: Segment) -> bool:

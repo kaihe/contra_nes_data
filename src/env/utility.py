@@ -16,7 +16,22 @@ from .constant import (
     BOSS_ENEMY_TYPES_COMMON,
     ENEMY_TYPE_FALLING_ROCK,
     INSIDE_LEVELS,
+    UP_LEVELS,
 )
+
+
+def advance_style(level: int) -> str:
+    """How the player advances through a 0-indexed level.
+
+    "forward" : horizontal scroll (side-scroll levels)
+    "inside"  : break the core, walk through the door, enter the next room
+    "up"      : vertical scroll (climbing levels)
+    """
+    if level in INSIDE_LEVELS:
+        return "inside"
+    if level in UP_LEVELS:
+        return "up"
+    return "forward"
 
 
 def xscroll(ram: np.ndarray) -> int:
@@ -74,6 +89,24 @@ def boss_enemy_present(ram: np.ndarray) -> bool:
         if int(ram[ADDR_ENEMY_TYPE + slot]) in types:
             return True
     return False
+
+
+def boss_hp(ram: np.ndarray) -> int:
+    """Total HP across active boss-objective slots; zero when none are active.
+
+    This is the interpreted boss-progress API shared by data generation and
+    policy-side reward shaping. Consumers must use it instead of importing RAM
+    addresses or reimplementing the level-specific boss type table.
+    """
+    level = int(ram[ADDR_LEVEL])
+    types = BOSS_ENEMY_TYPES_COMMON | BOSS_ENEMY_TYPES_BY_LEVEL.get(level, set())
+    total = 0
+    for slot in range(ADDR_ENEMY_HP_COUNT):
+        if int(ram[ADDR_ENEMY_HP + slot]) >= 0xf0:
+            continue
+        if int(ram[ADDR_ENEMY_TYPE + slot]) in types:
+            total += int(ram[ADDR_ENEMY_HP + slot])
+    return total
 
 
 def boss_scene(ram: np.ndarray) -> bool:

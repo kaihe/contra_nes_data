@@ -17,6 +17,7 @@ package-dir = { "" = "src" }
 [tool.setuptools.packages.find]
 where = ["src"]
 
-# Ship the YAML action configs that action.py loads at import time.
+# Ship the YAML action configs (loaded at import time) and the spread-gun start
+# states mc_search begins levels 2-8 from.
 [tool.setuptools.package-data]
-agent = ["*.yaml"]
+agent = ["*.yaml", "states/*/*.state"]

@@ -38,7 +38,8 @@ For every requested search:
 
 1. sample a source task uniformly;
 2. choose offset zero with probability `full_fraction` (default 0.3), otherwise
-   choose a decision offset uniformly from the fight;
+   choose a decision offset uniformly after full reveal, excluding the final
+   eight-decision transition tail;
 3. replay the task to the start of that decision and capture the emulator state;
 4. search from the captured state to the unchanged level-clear predicate;
 5. save a raw trace under `game_trace/mc_trace/boss_level1/` and a task under a
