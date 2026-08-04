@@ -195,6 +195,30 @@ Flamethrower, Laser, Regular and Spread. That mixed-start design was retired
 before production generation. The active bank keeps only the four full-fight
 states so every candidate solves the same task horizon.
 
+## 7. Full-fight release (2026-08-04)
+
+`game_trace/releases/boss-full-v1/` was built from 200 raw full-fight wins: 50
+each for Flamethrower, Laser, Regular and Spread. Every trace matched a
+checksummed full-state entry and replayed through the unchanged boss-clear
+predicate. With `min_distance=0`, all 200 were accepted: there were no exact
+duplicates. Nearest-neighbour distance percentiles against same-weapon
+published/accepted tasks were p10=0.1151, median=0.1458 and p90=0.1877.
+
+The release combines those 200 tasks with the exact 466-episode published train
+baseline. Frame balancing produced three train shards:
+
+| shard | episodes | decision frames | bytes |
+|---|---:|---:|---:|
+| `boss-train-00000.tar` | 221 | 39,985 | 311,797,760 |
+| `boss-train-00001.tar` | 223 | 40,035 | 312,401,920 |
+| `boss-train-00002.tar` | 222 | 40,035 | 312,268,800 |
+
+All 548,512 entity/centroid checks passed. The copied 57-episode validation tar
+is byte-identical to the published shard with SHA-256
+`131835e34c55f75ded04410976730600a866744b40a8525bfc4d7f9ab952ecad`.
+`manifest.json` records every accepted task fingerprint/SHA and every shard
+UID/SHA; no incomplete `.tmp` files remain.
+
 ## Appendix — provenance
 
 | claim | source |
@@ -206,3 +230,4 @@ states so every candidate solves the same task horizon.
 | published boss train shard has 466 episodes / 79,495 frames | scan of `game_trace/hf/boss-train-00000.tar` JSON members on 2026-08-04 |
 | diversity reference replay takes 80 seconds | full 466-train feature pass with `task_maker.boss_release` on 2026-08-04 |
 | frame planner produced two equal 44,384-frame shards for 466 baseline + 59 proxy generated tasks | `frame_balanced_shards(..., target_frames=60000)` on 2026-08-04 |
+| 200 candidates, diversity percentiles and 666-episode release counts | `game_trace/releases/boss-full-v1/manifest.json` |
