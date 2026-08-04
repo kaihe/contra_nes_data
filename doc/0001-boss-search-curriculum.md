@@ -5,12 +5,12 @@ Status: Proposed
 **Question.** How should level-1 boss demonstrations be diversified without
 changing the frozen validation set or losing the source-trace split boundary?
 
-**Answer.** First materialize a small, reproducible bank of train-derived boss
-savestates, then run ordinary `mc_search` directly from those files. The bank
-contains full and partial starts for each observed weapon class and records the
-root task, split, offset, HP, loadout and checksum in a manifest. This makes the
-starting conditions inspectable and reusable before any larger additive task
-generation is approved. Never sample or rewrite validation.
+**Answer.** Materialize a small, reproducible bank of train-derived full-fight
+boss savestates, then run ordinary `mc_search` directly from those files. The
+bank contains one reveal start for each observed weapon class and records the
+root task, split, HP, loadout and checksum in a manifest. Generated traces enter
+training only after replay verification and diversity filtering, then ship in a
+versioned, frame-balanced train release. Never sample or rewrite validation.
 
 ---
 
@@ -34,14 +34,14 @@ unchanged.
 
 The first-stage bank lives in `src/agent/states/boss_level1/`, matching the
 gzip-compressed format used by the per-level Spread states. For each observed
-weapon class, the median-length train source contributes its reveal state and
-one seeded post-reveal partial state. `mc_search --initial-state FILE` loads the
-state, verifies its manifest checksum, and copies its lineage metadata into the
-raw winning trace under `game_trace/mc_trace/boss_level1/`.
+weapon class, the median-length train source contributes its reveal state.
+`mc_search --initial-state FILE` loads the state, verifies its manifest
+checksum, and copies its lineage metadata into the raw winning trace under
+`game_trace/mc_trace/boss_level1/`.
 
-This fixed bank is the default experiment surface. The broader randomized
-curriculum below remains available as a later scaling mechanism, after results
-from the fixed starts justify it.
+This fixed full-fight bank is the experiment surface. Partial starts are not
+part of this release: they change the task difficulty and can make apparent
+diversity come from the start state instead of the strategy.
 
 The input unit is an existing `boss_level1` task, not an arbitrary frame pooled
 across all tasks. Inputs with `split != "train"` are rejected before sampling.
@@ -84,6 +84,30 @@ The same four fields pass through to HF JSON. `KillBossMaker.boss_hp(ram)` is a
 public accessor delegating to the RAM helper so policy reward shaping needs no
 `ADDR_*` knowledge.
 
+### Candidate acceptance and shard releases
+
+Raw `mc_search` files are candidates, not training samples. A release builder:
+
+1. matches each trace to a checksummed full-fight state-bank entry;
+2. replays it through the unchanged boss-clear predicate and writes a train-only
+   replayable task into a release staging directory;
+3. computes action and replay-state diversity against both the candidate batch
+   and the existing train set, rejecting exact duplicates and reporting nearest
+   neighbours rather than hiding the threshold;
+4. assigns accepted tasks deterministically to shards by total decision frames,
+   with weapon/start strata distributed across shards;
+5. materializes self-contained WebDataset tar files and writes a JSON manifest
+   containing task IDs, hashes, counts, frame totals and the frozen validation
+   shard hash.
+
+Candidate releases live outside the production shard directory. Promotion
+creates a versioned directory rather than overwriting the existing shard. The
+57-example validation tar is copied byte-for-byte; it is never re-exported.
+Train shard targets are expressed in frames (default 60,000), not episodes,
+because boss trace lengths vary substantially. Very small delta shards are not
+mixed with baseline shards implicitly: shard-uniform consumers could otherwise
+oversample the generated data.
+
 ### Acceptance contract
 
 - Existing 523 boss task files remain byte-identical.
@@ -91,6 +115,8 @@ public accessor delegating to the RAM helper so policy reward shaping needs no
   remains exactly 846 tasks.
 - Every new task is `split=train`, names an original train `src_trace`, retains
   the source `skip`, and replays to the existing success predicate.
+- A release manifest proves the validation tar hash and lists the exact accepted
+  task and shard hashes.
 - A pilot reports search win rate and the action/weapon/offset distribution
   before a large generation run is accepted.
 
@@ -112,15 +138,20 @@ an explicit task alongside its raw trace instead.
 **Replacing the existing boss tasks.** Existing tasks anchor all published
 evaluation comparisons. New tasks are additive and train-only.
 
+**Partial starts in the full-fight release.** They provide useful curriculum
+data but confound strategy diversity with reduced HP and elapsed fight state.
+This release accepts only `stage=full`; partial starts may be evaluated later as
+a separately named dataset configuration.
+
 ## 4. Risks and gates
 
 | risk | why it is plausible | gate |
 |---|---|---|
 | apparent diversity is only action noise | all searches share a sampler | pilot action profiles and lengths differ across independent searches |
-| partial starts contain no active boss HP | reveal timing and component slots vary | reject starts with `boss_hp_start <= 0` |
 | generated data leaks validation | filenames and derived states can obscure lineage | all inputs and outputs assert original `split=train`; frozen hashes unchanged |
 | search wins do not replay | skip/state/action alignment is fragile | every accepted task passes `KillBossMaker.verify_segment` |
-| easier partial tasks inflate metrics | offset changes difficulty | export `boss_hp_start` and `offset_frac` for stratified reporting |
+| variable lengths make episode-balanced shards uneven | long traces dominate bytes and tokens | deterministic frame-balanced assignment |
+| small generated shard is oversampled | some loaders sample shards uniformly | versioned release + explicit manifest; no implicit tiny delta |
 
 ## 5. Sequencing
 
@@ -128,15 +159,12 @@ evaluation comparisons. New tasks are additive and train-only.
 2. Generalize `mc_search` to accept a supplied initial state without changing
    its default level-start behavior.
 3. Add the train-only boss sampling/generation driver and provenance tests.
-4. Build the fixed state bank and run `mc_search` once from every bank entry;
+4. Build the fixed full-fight state bank and run `mc_search` from every entry;
    inspect win rate, latency and diversity.
-5. Only after accepting that pilot, optionally run the deterministic resumable
-   `k=1` batch schedule: every one of the
-   466 sources once at offset zero plus 1,087 trace-first partial requests, for
-   1,553 new tasks at the accepted 30/70 mix. Partition by global request ID when
-   running concurrent shards.
-6. Export the accepted batch, then hand the new shard/API contract to policy
-   through a GitHub issue.
+5. Import replay-verified candidates, measure nearest-neighbour diversity, and
+   select the accepted full-fight task set.
+6. Export a versioned, frame-balanced release and hand its manifest/API contract
+   to policy through a GitHub issue.
 
 ## 6. Execution update (2026-08-03)
 
@@ -146,10 +174,10 @@ The experiment pivoted to the fixed state bank above because it gives direct,
 repeatable `mc_search` starting points and makes search behavior measurable
 before committing compute to 1,553 requests.
 
-The bank contains eight states: full and partial starts for Flamethrower, Laser,
-Regular and Spread. In the first smoke matrix, all four partial starts and three
-of four full starts produced saved wins within a 90-second per-search budget;
-full Flamethrower did not win in that cap. Successful searches took 8–78 seconds.
+The first bank contained eight states: full and partial starts for
+Flamethrower, Laser, Regular and Spread. That mixed-start design was retired
+before production generation. The active bank keeps only the four full-fight
+states so every candidate solves the same task horizon.
 
 ## Appendix — provenance
 
