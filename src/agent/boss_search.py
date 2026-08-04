@@ -95,13 +95,13 @@ def _weapon_meta(ram) -> tuple[str, bool]:
 
 def build_state_bank(paths: list[str], out_dir: str = DEFAULT_STATE_BANK,
                      *, seed: int = 0) -> list[dict]:
-    """Save a compact, weapon-balanced bank of full and partial boss states.
+    """Save a compact, weapon-balanced bank of full-fight boss states.
 
     One representative train source per observed weapon is chosen by median
-    fight length. Each contributes its reveal state and one deterministic
-    post-reveal partial state. Files use the same gzip-compressed stable-retro
-    state format as ``states/spread_gun/Level<N>.state``; ``manifest.yaml`` owns
-    the source lineage and interpreted metadata.
+    fight length and contributes its reveal state. Files use the same
+    gzip-compressed stable-retro state format as
+    ``states/spread_gun/Level<N>.state``; ``manifest.yaml`` owns the source
+    lineage and interpreted metadata.
     """
     by_weapon = {}
     for path in paths:
@@ -116,16 +116,10 @@ def build_state_bank(paths: list[str], out_dir: str = DEFAULT_STATE_BANK,
     for weapon_index, weapon in enumerate(sorted(by_weapon)):
         ranked = sorted(by_weapon[weapon])
         _, source_path = ranked[len(ranked) // 2]
-        starts = [
-            ("full", capture_start(source_path, full=True,
-                                   rng=np.random.default_rng(seed + weapon_index))),
-            ("partial", capture_start(
-                source_path, full=False,
-                rng=np.random.default_rng(
-                    np.random.SeedSequence([seed, weapon_index, 1]).generate_state(1)[0]
-                ),
-            )),
-        ]
+        starts = [("full", capture_start(
+            source_path, full=True,
+            rng=np.random.default_rng(seed + weapon_index),
+        ))]
         slug = weapon.lower().replace(" ", "_")
         for stage, start in starts:
             filename = f"{stage}_{slug}.state"
@@ -151,7 +145,7 @@ def build_state_bank(paths: list[str], out_dir: str = DEFAULT_STATE_BANK,
     manifest = {
         "level": 1,
         "seed": int(seed),
-        "selection": "median-length train source per weapon; full + one partial",
+        "selection": "median-length train source per weapon; full fight only",
         "states": entries,
     }
     with open(os.path.join(out_dir, "manifest.yaml"), "w") as fh:

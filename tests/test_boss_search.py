@@ -100,7 +100,7 @@ def test_batch_schedule_covers_every_full_source_and_shards_are_disjoint():
     assert sum(len(shard) for shard in shards) == len(whole)
 
 
-def test_build_state_bank_writes_full_and_partial_per_weapon(tmp_path, monkeypatch):
+def test_build_state_bank_writes_one_full_state_per_weapon(tmp_path, monkeypatch):
     paths = []
     weapons = ["Regular", "Spread"]
     for index, weapon in enumerate(weapons):
@@ -121,14 +121,15 @@ def test_build_state_bank_writes_full_and_partial_per_weapon(tmp_path, monkeypat
     out = tmp_path / "bank"
     entries = build_state_bank(paths, str(out), seed=11)
 
-    assert len(entries) == 4
+    assert len(entries) == 2
     assert {e["name"] for e in entries} == {
-        "full_regular", "partial_regular", "full_spread", "partial_spread"
+        "full_regular", "full_spread"
     }
     assert all((out / e["file"]).exists() for e in entries)
     manifest = yaml.safe_load((out / "manifest.yaml").read_text())
     assert manifest["seed"] == 11
-    assert len(manifest["states"]) == 4
+    assert len(manifest["states"]) == 2
+    assert all(e["stage"] == "full" for e in manifest["states"])
 
 
 def test_save_trace_metadata_round_trip_and_reserved_keys(tmp_path):

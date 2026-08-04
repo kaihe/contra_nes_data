@@ -227,7 +227,10 @@ def _add(tar, name, data):
 
 _META_PASSTHROUGH = ("target_entity", "source_entity", "item_weapon", "kind",
                      "start_seg", "end_seg", "weapon", "rapid",
-                     "boss_hp_start", "offset_frac")
+                     "boss_hp_start", "offset_frac", "batch_id", "stage",
+                     "source_task", "source_offset", "initial_state_name",
+                     "initial_state_sha256", "raw_trace", "trace_fingerprint",
+                     "diversity_nearest_uid", "diversity_nearest_distance")
 
 
 def write_shard(paths, out_tar, *, codec="ffv1", sigma=12.0, verify=True):

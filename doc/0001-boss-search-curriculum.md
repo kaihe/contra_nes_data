@@ -108,6 +108,22 @@ because boss trace lengths vary substantially. Very small delta shards are not
 mixed with baseline shards implicitly: shard-uniform consumers could otherwise
 oversample the generated data.
 
+Build a release after generation with:
+
+```bash
+PYTHONPATH=src python -m task_maker.boss_release \
+  --batch-id boss-full-v1 \
+  --traces 'game_trace/mc_trace/boss_level1/win_boss_level1_full_*.npz' \
+  --out game_trace/releases/boss-full-v1 \
+  --target-frames 60000 \
+  --min-distance 0
+```
+
+Distance zero rejects only exact state+action duplicates and records the
+nearest-neighbour distribution in `manifest.json`. A later release may set a
+positive threshold after that distribution has been reviewed; release
+directories are immutable once their manifest exists.
+
 ### Acceptance contract
 
 - Existing 523 boss task files remain byte-identical.
@@ -187,3 +203,6 @@ states so every candidate solves the same task horizon.
 | validation total is fixed at 846 | `contra_nes_evaluation/doc/0008-grpo-with-boss.md` |
 | policy fails around the approach/engage transition | `contra_nes_data` issue #2 and `contra_nes_policy/doc/0004-grpo-experiment-plan.md` |
 | existing median boss length is about 140 decisions | scan of the same 523 boss task files on 2026-08-03 |
+| published boss train shard has 466 episodes / 79,495 frames | scan of `game_trace/hf/boss-train-00000.tar` JSON members on 2026-08-04 |
+| diversity reference replay takes 80 seconds | full 466-train feature pass with `task_maker.boss_release` on 2026-08-04 |
+| frame planner produced two equal 44,384-frame shards for 466 baseline + 59 proxy generated tasks | `frame_balanced_shards(..., target_frames=60000)` on 2026-08-04 |

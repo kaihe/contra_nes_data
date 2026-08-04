@@ -17,7 +17,6 @@ package-dir = { "" = "src" }
 [tool.setuptools.packages.find]
 where = ["src"]
 
-# Ship the YAML action configs (loaded at import time) and the spread-gun start
-# states mc_search begins levels 2-8 from.
+# Ship action configs plus the reproducible spread-gun and boss start-state banks.
 [tool.setuptools.package-data]
-agent = ["*.yaml", "states/*/*.state"]
+agent = ["*.yaml", "states/*/*.state", "states/*/*.yaml"]
