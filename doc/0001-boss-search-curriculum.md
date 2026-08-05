@@ -219,6 +219,36 @@ is byte-identical to the published shard with SHA-256
 `manifest.json` records every accepted task fingerprint/SHA and every shard
 UID/SHA; no incomplete `.tmp` files remain.
 
+## 8. Pure-boss data and parameter scaling
+
+The policy scaling experiment uses a second release whose train split contains
+only generated full-fight tasks. The 466 published train tasks remain the
+diversity reference but are excluded from optimization, so the independent
+variable is generated search data rather than a mixture whose baseline fraction
+changes with scale. Evaluation always uses the same byte-identical 57-example
+validation tar and success predicate.
+
+The target snapshot is 2,200 full-fight traces: 550 per weapon, comprising the
+first 200 candidates plus the subsequent 2,000-trace generation batch. The
+release command asserts this count before importing so a live or incomplete
+directory cannot silently define the experiment.
+
+Train shards are approximately equal in decision frames and individually
+weapon-stratified. The manifest defines cumulative shard prefixes at 1, 2, 4
+and all shards. Those prefixes form nested, near-doubling data scales without
+duplicating video payloads. Policy should cross these fixed data prefixes with
+its parameter scales, keeping optimizer tokens/epochs explicitly reported so a
+larger dataset is not accidentally given a different compute interpretation.
+
+The pure release must record:
+
+- `train_mode=generated_only` and zero baseline episodes included in train;
+- 466 baseline episodes used only as nearest-neighbour references;
+- the expected and observed raw candidate counts;
+- per-shard weapon, episode and frame counts;
+- cumulative prefix shard names, episode counts and frame counts;
+- the unchanged validation SHA-256.
+
 ## Appendix — provenance
 
 | claim | source |
