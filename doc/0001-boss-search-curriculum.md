@@ -221,12 +221,15 @@ UID/SHA; no incomplete `.tmp` files remain.
 
 ## 8. Pure-boss data and parameter scaling
 
-The policy scaling experiment uses a second release whose train split contains
-only generated full-fight tasks. The 466 published train tasks remain the
-diversity reference but are excluded from optimization, so the independent
-variable is generated search data rather than a mixture whose baseline fraction
-changes with scale. Evaluation always uses the same byte-identical 57-example
-validation tar and success predicate.
+The optional fixed-start/OOD scaling experiment uses a second release whose
+train split contains only generated full-fight tasks. The 466 published train
+tasks remain the diversity reference but are excluded from optimization, so the
+independent variable is generated search data rather than a mixture whose
+baseline fraction changes with scale. This is not the primary historical
+comparison dataset: the generated tasks come from only four fixed emulator
+states, whereas the frozen validation examples come from 57 distinct original
+traces. Evaluation still uses the same byte-identical 57-example validation tar
+and success predicate.
 
 The original target snapshot was 2,200 full-fight traces: 550 per weapon,
 comprising the first 200 candidates plus a subsequent 2,000-trace generation
@@ -288,6 +291,51 @@ shard hashes match, and no temporary files remain. Validation is the same
 57-episode tar with SHA-256
 `131835e34c55f75ded04410976730600a866744b40a8525bfc4d7f9ab952ecad`.
 
+## 10. Mixed v2 release (2026-08-05)
+
+`game_trace/releases/boss-mixed-v2/` is the primary dataset for comparison to
+historical boss results. It retains all 466 published training episodes and
+adds all 2,034 replay-verified generated full-fight episodes, for 2,500 train
+episodes and 464,019 decision frames. This preserves broad original-trace
+coverage in training while adding the large fixed-start search batch. The pure
+release remains available only for explicitly labelled fixed-start/OOD
+ablations.
+
+All 2,034 candidates were accepted at `min_distance=0`; there were zero exact
+or threshold duplicates. Generated weapon counts are 384 Flamethrower and 550
+each Laser, Regular and Spread. After adding the published baseline, the train
+mix is 412 Flamethrower, 702 Laser, 710 Regular and 676 Spread.
+
+Eight frame-balanced shards contain 312 or 313 episodes each and range from
+57,982 to 58,030 decision frames. The manifest exposes nested scaling prefixes:
+
+| shards | episodes | decision frames |
+|---:|---:|---:|
+| 1 | 313 | 58,015 |
+| 2 | 625 | 115,997 |
+| 4 | 1,250 | 232,009 |
+| 8 | 2,500 | 464,019 |
+
+Nearest-neighbour diversity p10/median/p90 is
+0.0921/0.1256/0.1589. All 2,079,791 entity/centroid checks passed with zero
+mismatches, every independently recomputed shard hash matches the manifest,
+and no temporary files remain. The copied validation shard is byte-identical
+to `game_trace/hf/boss-val-00000.tar`: 57 episodes with SHA-256
+`131835e34c55f75ded04410976730600a866744b40a8525bfc4d7f9ab952ecad`.
+
+The guarded build command is:
+
+```bash
+PYTHONPATH=src python -m task_maker.boss_release \
+  --batch-id boss-mixed-v2 \
+  --traces 'game_trace/mc_trace/boss_level1/win_boss_level1_full_*.npz' \
+  --out game_trace/releases/boss-mixed-v2 \
+  --train-mode baseline_plus_generated \
+  --expected-candidates 2034 \
+  --target-frames 60000 \
+  --min-distance 0
+```
+
 ## Appendix — provenance
 
 | claim | source |
@@ -300,3 +348,5 @@ shard hashes match, and no temporary files remain. Validation is the same
 | diversity reference replay takes 80 seconds | full 466-train feature pass with `task_maker.boss_release` on 2026-08-04 |
 | frame planner produced two equal 44,384-frame shards for 466 baseline + 59 proxy generated tasks | `frame_balanced_shards(..., target_frames=60000)` on 2026-08-04 |
 | 200 candidates, diversity percentiles and 666-episode release counts | `game_trace/releases/boss-full-v1/manifest.json` |
+| pure release has 2,034 tasks from four fixed starting states | `game_trace/releases/boss-pure-v1/manifest.json` and accepted task metadata |
+| mixed v2 has 466 baseline + 2,034 generated train episodes and unchanged 57-example validation | `game_trace/releases/boss-mixed-v2/manifest.json` |
