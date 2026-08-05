@@ -228,10 +228,11 @@ variable is generated search data rather than a mixture whose baseline fraction
 changes with scale. Evaluation always uses the same byte-identical 57-example
 validation tar and success predicate.
 
-The target snapshot is 2,200 full-fight traces: 550 per weapon, comprising the
-first 200 candidates plus the subsequent 2,000-trace generation batch. The
-release command asserts this count before importing so a live or incomplete
-directory cannot silently define the experiment.
+The original target snapshot was 2,200 full-fight traces: 550 per weapon,
+comprising the first 200 candidates plus a subsequent 2,000-trace generation
+batch. Generation was stopped at 2,034 and the user explicitly accepted that
+snapshot. The release command asserts the chosen count before importing so a
+live directory cannot silently define the experiment.
 
 Train shards are approximately equal in decision frames and individually
 weapon-stratified. The manifest defines cumulative shard prefixes at 1, 2, 4
@@ -257,10 +258,35 @@ PYTHONPATH=src python -m task_maker.boss_release \
   --traces 'game_trace/mc_trace/boss_level1/win_boss_level1_full_*.npz' \
   --out game_trace/releases/boss-pure-v1 \
   --train-mode generated_only \
-  --expected-candidates 2200 \
+  --expected-candidates 2034 \
   --target-frames 60000 \
   --min-distance 0
 ```
+
+## 9. Pure-boss release (2026-08-05)
+
+`game_trace/releases/boss-pure-v1/` contains only generated full-fight tasks in
+train: all 2,034 raw candidates replay-verified and were accepted, with zero
+exact or near duplicates at `min_distance=0`. The 466 published train tasks
+were used only as diversity references and contribute zero optimization
+episodes. Weapon counts are 384 Flamethrower and 550 each Laser, Regular and
+Spread; every shard preserves approximately that stopped-run ratio.
+
+Seven train shards contain 384,524 decision frames total. Their individual
+frame counts range only from 54,917 to 54,965. The nested scaling prefixes are:
+
+| shards | episodes | decision frames |
+|---:|---:|---:|
+| 1 | 291 | 54,928 |
+| 2 | 582 | 109,847 |
+| 4 | 1,163 | 219,691 |
+| 7 | 2,034 | 384,524 |
+
+Nearest-neighbour diversity p10/median/p90 is
+0.0921/0.1256/0.1589. All 1,710,334 entity/centroid checks passed, all recorded
+shard hashes match, and no temporary files remain. Validation is the same
+57-episode tar with SHA-256
+`131835e34c55f75ded04410976730600a866744b40a8525bfc4d7f9ab952ecad`.
 
 ## Appendix — provenance
 
