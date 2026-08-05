@@ -5,6 +5,9 @@ matched to the checksummed full-fight state bank, replayed into a normal
 ``boss_level1`` task, compared with the published train set, and then combined
 with that published baseline in deterministic frame-balanced shards.  The
 published validation tar is copied byte-for-byte; it is never regenerated.
+``--train-mode generated_only`` instead uses the published train set solely as
+a diversity reference and produces nested shard-prefix scales over generated
+tasks only.
 
 Example::
 
@@ -344,10 +347,17 @@ def build_release(*, trace_paths: list[str], batch_id: str, out_dir: str,
                   validation: str = DEFAULT_VALIDATION,
                   task_pattern: str = DEFAULT_TASK_GLOB,
                   target_frames: int = 60_000, min_distance: float = 0.0,
-                  codec: str = "png") -> dict:
+                  codec: str = "png",
+                  train_mode: str = "baseline_plus_generated",
+                  expected_candidates: int | None = None) -> dict:
     """Run the full candidate-to-release pipeline and return its manifest."""
     if not re.fullmatch(r"[A-Za-z0-9._-]+", batch_id):
         raise ValueError("batch_id may contain only letters, digits, dot, underscore and dash")
+    if train_mode not in {"baseline_plus_generated", "generated_only"}:
+        raise ValueError(f"unknown train_mode: {train_mode!r}")
+    if expected_candidates is not None and len(trace_paths) != expected_candidates:
+        raise ValueError(
+            f"expected {expected_candidates} raw candidates, found {len(trace_paths)}")
     manifest_path = os.path.join(out_dir, "manifest.json")
     if os.path.exists(manifest_path):
         raise FileExistsError(f"release is immutable and already exists: {manifest_path}")
@@ -390,29 +400,57 @@ def build_release(*, trace_paths: list[str], batch_id: str, out_dir: str,
     if sha256_file(val_out) != validation_sha:
         raise RuntimeError("copied validation shard hash changed")
 
-    groups = frame_balanced_shards(baseline_paths + accepted, target_frames)
+    train_paths = (accepted if train_mode == "generated_only"
+                   else baseline_paths + accepted)
+    groups = frame_balanced_shards(train_paths, target_frames)
     shard_rows = []
     for index, group in enumerate(groups):
         path = os.path.join(hf_dir, f"boss-train-{index:05d}.tar")
         size, episodes, frames = _atomic_shard(group, path, codec=codec)
+        weapon_counts = Counter(str(load_task(p).meta.get("weapon", "")) for p in group)
         shard_rows.append({
             "file": os.path.relpath(path, out_dir),
             "sha256": sha256_file(path),
             "episodes": episodes,
             "frames": frames,
             "bytes": size,
+            "by_weapon": dict(sorted(weapon_counts.items())),
             "uids": [os.path.splitext(os.path.basename(p))[0] for p in group],
+        })
+
+    prefix_counts = []
+    count = 1
+    while count < len(shard_rows):
+        prefix_counts.append(count)
+        count *= 2
+    if shard_rows and (not prefix_counts or prefix_counts[-1] != len(shard_rows)):
+        prefix_counts.append(len(shard_rows))
+    scaling_prefixes = []
+    for count in prefix_counts:
+        prefix = shard_rows[:count]
+        scaling_prefixes.append({
+            "shard_count": count,
+            "files": [row["file"] for row in prefix],
+            "episodes": sum(row["episodes"] for row in prefix),
+            "frames": sum(row["frames"] for row in prefix),
+            "by_weapon": dict(sorted(sum(
+                (Counter(row["by_weapon"]) for row in prefix), Counter()).items())),
         })
 
     manifest = {
         "format_version": 1,
         "batch_id": batch_id,
+        "train_mode": train_mode,
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "codec": codec,
         "target_frames_per_train_shard": target_frames,
         "min_diversity_distance": min_distance,
-        "baseline_train_shard": baseline_train,
-        "baseline_train_episodes": len(baseline_paths),
+        "baseline_reference_shard": baseline_train,
+        "baseline_reference_episodes": len(baseline_paths),
+        "baseline_train_episodes": (0 if train_mode == "generated_only"
+                                    else len(baseline_paths)),
+        "expected_candidate_files": expected_candidates,
+        "raw_candidate_files": len(trace_paths),
         "candidate_episodes": len(candidate_paths),
         "accepted_generated_episodes": len(accepted),
         "accepted_generated_tasks": [
@@ -430,6 +468,7 @@ def build_release(*, trace_paths: list[str], batch_id: str, out_dir: str,
             "episodes": len(shard_uids(validation)),
         },
         "train_shards": shard_rows,
+        "train_scaling_prefixes": scaling_prefixes,
         "diversity_summary": diversity_summary,
         "diversity": diversity,
     }
@@ -456,6 +495,11 @@ def _parse_args(argv=None):
     p.add_argument("--target-frames", type=int, default=60_000)
     p.add_argument("--min-distance", type=float, default=0.0)
     p.add_argument("--codec", choices=["png", "ffv1", "h264"], default="png")
+    p.add_argument("--train-mode",
+                   choices=["baseline_plus_generated", "generated_only"],
+                   default="baseline_plus_generated")
+    p.add_argument("--expected-candidates", type=int,
+                   help="refuse a live/incomplete trace snapshot with another count")
     return p.parse_args(argv)
 
 
@@ -469,7 +513,8 @@ def main(argv=None):
         bank_path=args.state_bank, baseline_train=args.baseline_train,
         validation=args.validation, task_pattern=args.source_tasks,
         target_frames=args.target_frames, min_distance=args.min_distance,
-        codec=args.codec,
+        codec=args.codec, train_mode=args.train_mode,
+        expected_candidates=args.expected_candidates,
     )
 
 

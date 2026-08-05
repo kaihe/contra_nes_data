@@ -139,7 +139,8 @@ def test_import_real_full_source_replays_to_verified_train_task(tmp_path):
     assert imported.meta["initial_state_sha256"] == entry["state_sha256"]
 
 
-def test_release_copies_validation_and_records_accepted_hashes(tmp_path, monkeypatch):
+def test_generated_only_release_copies_validation_and_excludes_baseline_train(
+        tmp_path, monkeypatch):
     baseline_task = tmp_path / "baseline.npz"
     _task(baseline_task, length=5, weapon="Regular")
     out = tmp_path / "release"
@@ -179,12 +180,32 @@ def test_release_copies_validation_and_records_accepted_hashes(tmp_path, monkeyp
         trace_paths=["unused"], batch_id="test-v1", out_dir=str(out),
         baseline_train=str(baseline_tar), validation=str(validation_tar),
         task_pattern=str(tmp_path / "*.npz"), target_frames=100,
+        train_mode="generated_only", expected_candidates=1,
     )
 
     copied_validation = out / "hf" / "boss-val-00000.tar"
     assert copied_validation.read_bytes() == validation_tar.read_bytes()
-    assert manifest["baseline_train_episodes"] == 1
+    assert manifest["train_mode"] == "generated_only"
+    assert manifest["baseline_reference_episodes"] == 1
+    assert manifest["baseline_train_episodes"] == 0
+    assert manifest["raw_candidate_files"] == 1
     assert manifest["accepted_generated_episodes"] == 1
     assert manifest["accepted_generated_tasks"][0]["sha256"] == \
         hashlib.sha256(candidate_task.read_bytes()).hexdigest()
-    assert manifest["train_shards"][0]["episodes"] == 2
+    assert manifest["train_shards"][0]["episodes"] == 1
+    assert manifest["train_shards"][0]["by_weapon"] == {"Spread": 1}
+    assert manifest["train_scaling_prefixes"] == [{
+        "shard_count": 1,
+        "files": ["hf/boss-train-00000.tar"],
+        "episodes": 1,
+        "frames": 4,
+        "by_weapon": {"Spread": 1},
+    }]
+
+
+def test_release_refuses_incomplete_candidate_snapshot(tmp_path):
+    with pytest.raises(ValueError, match="expected 2200.*found 1"):
+        build_release(
+            trace_paths=["one"], batch_id="pure-v1", out_dir=str(tmp_path),
+            expected_candidates=2200,
+        )

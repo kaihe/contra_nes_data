@@ -249,6 +249,19 @@ The pure release must record:
 - cumulative prefix shard names, episode counts and frame counts;
 - the unchanged validation SHA-256.
 
+Build it only after generation reaches the guarded snapshot count:
+
+```bash
+PYTHONPATH=src python -m task_maker.boss_release \
+  --batch-id boss-pure-v1 \
+  --traces 'game_trace/mc_trace/boss_level1/win_boss_level1_full_*.npz' \
+  --out game_trace/releases/boss-pure-v1 \
+  --train-mode generated_only \
+  --expected-candidates 2200 \
+  --target-frames 60000 \
+  --min-distance 0
+```
+
 ## Appendix — provenance
 
 | claim | source |
