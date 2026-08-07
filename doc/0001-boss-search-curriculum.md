@@ -341,8 +341,12 @@ PYTHONPATH=src python -m task_maker.boss_release \
 The Spread full-fight search benchmark optimizes replay-verified wins per wall
 clock hour on the local 32-logical-CPU machine. CPU consumption is deliberately
 not part of the objective, so every cell uses 28 workers. Benchmark traces and
-attempt-level JSONL stay under `tmp/boss-spread-grid/` and never enter the
-production candidate directory implicitly.
+attempt-level JSONL stay under `tmp/boss-spread-grid/`. Every replay-valid win
+is also atomically promoted to `game_trace/mc_trace/boss_level1/` with its grid
+stage, configuration, attempt and fingerprint in its provenance. A fingerprint
+index prevents benchmark repeats or existing production traces from being
+copied twice, so successful search work is retained without introducing exact
+duplicates.
 
 The screening grid crosses `rollouts={16,32,64}`,
 `(rollout_len,settle_margin)={(24,8),(36,12),(48,16)}`, and
