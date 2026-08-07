@@ -390,6 +390,21 @@ fingerprints, no non-win outcomes, no missing promoted files, and no temporary
 copy remnants. These traces remain available for later dataset construction;
 failing the diversity gate does not discard valid gameplay.
 
+## 12. Pure Spread training release
+
+The 1,374 full-fight traces whose checksummed start state identifies the Spread
+weapon will be materialized as `boss-spread-v1`. It is a `generated_only`
+release: the training WebDataset contains only these Spread demonstrations,
+while `boss-val-00000.tar` is copied byte-for-byte from the established
+57-example validation set. The existing 466-example boss train shard remains a
+diversity reference only and is not included in the new training shards.
+
+The release builder will reject any trace that cannot be matched to the
+full-fight state bank, replay each selected raw win before export, reject exact
+state/action duplicates, and record task and shard hashes in its immutable
+manifest. At the 60,000-decision-frame target, expect several deterministic
+Spread-only train shards rather than one oversized tar.
+
 ## Appendix — provenance
 
 | claim | source |
