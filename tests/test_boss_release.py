@@ -20,6 +20,7 @@ from task_maker.boss_release import (
     frame_balanced_shards,
     import_traces,
     load_full_bank,
+    split_holdout_paths,
 )
 from task_maker.base import load_task
 
@@ -209,3 +210,77 @@ def test_release_refuses_incomplete_candidate_snapshot(tmp_path):
             trace_paths=["one"], batch_id="pure-v1", out_dir=str(tmp_path),
             expected_candidates=2200,
         )
+
+
+def test_holdout_split_is_deterministic_and_disjoint(tmp_path):
+    paths = []
+    for index in range(4):
+        path = tmp_path / f"task{index}.npz"
+        _task(path, length=index + 2, weapon="Spread")
+        paths.append(str(path))
+
+    train, validation = split_holdout_paths(list(reversed(paths)), 1)
+
+    assert len(train) == 3
+    assert len(validation) == 1
+    assert set(train).isdisjoint(validation)
+    assert sorted(train + validation) == sorted(paths)
+    with pytest.raises(ValueError, match="leaves no training"):
+        split_holdout_paths(paths, 4)
+
+
+def test_generated_holdout_writes_disjoint_validation_shard(tmp_path, monkeypatch):
+    baseline_task = tmp_path / "baseline.npz"
+    _task(baseline_task, length=5, weapon="Spread")
+    out = tmp_path / "release"
+    candidate_dir = out / "tasks" / "boss_level1"
+    candidate_dir.mkdir(parents=True)
+    candidates = []
+    for index, length in enumerate((4, 6)):
+        path = candidate_dir / f"candidate{index}.npz"
+        _task(path, length=length, weapon="Spread")
+        candidates.append(str(path))
+    baseline_tar = tmp_path / "baseline.tar"
+    _one_json_tar(baseline_tar, "baseline")
+
+    monkeypatch.setattr(
+        "task_maker.boss_release.import_traces",
+        lambda *args, **kwargs: candidates,
+    )
+
+    def fake_select(paths, *args, **kwargs):
+        rows = [{
+            "uid": os.path.splitext(os.path.basename(path))[0], "path": path,
+            "weapon": "Spread", "length": len(load_task(path).actions),
+            "fingerprint": "train-fingerprint", "nearest_uid": "baseline",
+            "nearest_distance": 0.25, "accepted": True, "reason": "accepted",
+        } for path in paths]
+        return list(paths), rows
+
+    monkeypatch.setattr("task_maker.boss_release.select_diverse", fake_select)
+
+    def fake_shard(paths, dst, *, codec):
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        payload = "\n".join(sorted(os.path.basename(p) for p in paths)).encode()
+        with open(dst, "wb") as fh:
+            fh.write(payload)
+        return len(payload), len(paths), sum(len(load_task(p).actions) for p in paths)
+
+    monkeypatch.setattr("task_maker.boss_release._atomic_shard", fake_shard)
+
+    manifest = build_release(
+        trace_paths=["one", "two"], batch_id="test-v2", out_dir=str(out),
+        baseline_train=str(baseline_tar), task_pattern=str(tmp_path / "*.npz"),
+        train_mode="generated_only", expected_candidates=2,
+        holdout_validation_count=1,
+    )
+
+    assert manifest["accepted_generated_episodes"] == 1
+    assert manifest["validation"]["kind"] == "generated_holdout"
+    assert manifest["validation"]["episodes"] == 1
+    assert manifest["validation"]["frames"] in {4, 6}
+    train_fingerprints = {row["trace_fingerprint"]
+                          for row in manifest["accepted_generated_tasks"]}
+    validation_fingerprints = {row["trace_fingerprint"]
+                               for row in manifest["validation"]["tasks"]}
+    assert train_fingerprints.isdisjoint(validation_fingerprints)

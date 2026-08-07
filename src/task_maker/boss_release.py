@@ -138,6 +138,33 @@ def import_traces(trace_paths: list[str], *, batch_id: str, out_root: str,
     return written
 
 
+def task_fingerprint(path: str) -> str:
+    """Return the state/action identity used to keep release partitions disjoint."""
+    seg = load_task(path)
+    return hashlib.sha256(seg.initial_state + seg.actions.tobytes()).hexdigest()
+
+
+def split_holdout_paths(candidate_paths: list[str], validation_count: int) -> tuple[list[str], list[str]]:
+    """Deterministically reserve fingerprint-ranked candidates for validation.
+
+    The raw boss starts come from training lineage, but a release-level holdout
+    needs a stable, action-level partition so generated demonstrations cannot
+    appear in both its train and validation shards.
+    """
+    if validation_count < 0:
+        raise ValueError("validation_count must be non-negative")
+    keyed = sorted((task_fingerprint(path), path) for path in candidate_paths)
+    fingerprints = [fingerprint for fingerprint, _ in keyed]
+    if len(set(fingerprints)) != len(fingerprints):
+        raise ValueError("candidate tasks contain exact state/action duplicates")
+    if validation_count >= len(keyed):
+        raise ValueError(
+            f"validation_count {validation_count} leaves no training candidates")
+    validation = [path for _, path in keyed[:validation_count]]
+    train = [path for _, path in keyed[validation_count:]]
+    return train, validation
+
+
 def _action_tokens(actions: np.ndarray) -> np.ndarray:
     weights = (1 << np.arange(9, dtype=np.uint16))
     return np.asarray(actions, dtype=np.uint16).dot(weights)
@@ -349,12 +376,15 @@ def build_release(*, trace_paths: list[str], batch_id: str, out_dir: str,
                   target_frames: int = 60_000, min_distance: float = 0.0,
                   codec: str = "png",
                   train_mode: str = "baseline_plus_generated",
-                  expected_candidates: int | None = None) -> dict:
+                  expected_candidates: int | None = None,
+                  holdout_validation_count: int = 0) -> dict:
     """Run the full candidate-to-release pipeline and return its manifest."""
     if not re.fullmatch(r"[A-Za-z0-9._-]+", batch_id):
         raise ValueError("batch_id may contain only letters, digits, dot, underscore and dash")
     if train_mode not in {"baseline_plus_generated", "generated_only"}:
         raise ValueError(f"unknown train_mode: {train_mode!r}")
+    if holdout_validation_count and train_mode != "generated_only":
+        raise ValueError("a generated validation holdout requires generated_only mode")
     if expected_candidates is not None and len(trace_paths) != expected_candidates:
         raise ValueError(
             f"expected {expected_candidates} raw candidates, found {len(trace_paths)}")
@@ -366,9 +396,21 @@ def build_release(*, trace_paths: list[str], batch_id: str, out_dir: str,
         trace_paths, batch_id=batch_id, out_root=task_root,
         bank_path=bank_path, source_pattern=task_pattern,
     )
+    if holdout_validation_count and len(candidate_paths) != len(trace_paths):
+        raise ValueError("raw candidates included exact duplicates before holdout split")
+    train_candidates, validation_paths = split_holdout_paths(
+        candidate_paths, holdout_validation_count) if holdout_validation_count \
+        else (candidate_paths, [])
+    for path in candidate_paths:
+        seg = load_task(path)
+        seg.meta["source_split"] = seg.split
+        seg.meta["release_partition"] = "validation" if path in validation_paths else "train"
+        if path in validation_paths:
+            seg.split = "val"
+        write_segment(seg, task_root)
     baseline_paths = task_paths_for_uids(shard_uids(baseline_train), task_pattern)
     accepted, diversity = select_diverse(
-        candidate_paths, baseline_paths, min_distance=min_distance)
+        train_candidates, baseline_paths, min_distance=min_distance)
     row_by_path = {row["path"]: row for row in diversity}
     measured = [row["nearest_distance"] for row in diversity
                 if row["nearest_distance"] is not None]
@@ -395,10 +437,35 @@ def build_release(*, trace_paths: list[str], batch_id: str, out_dir: str,
 
     hf_dir = os.path.join(out_dir, "hf")
     val_out = os.path.join(hf_dir, "boss-val-00000.tar")
-    _atomic_copy(validation, val_out)
-    validation_sha = sha256_file(validation)
-    if sha256_file(val_out) != validation_sha:
-        raise RuntimeError("copied validation shard hash changed")
+    if validation_paths:
+        validation_bytes, validation_episodes, validation_frames = _atomic_shard(
+            validation_paths, val_out, codec=codec)
+        validation_sha = sha256_file(val_out)
+        validation_info = {
+            "file": os.path.relpath(val_out, out_dir),
+            "sha256": validation_sha,
+            "episodes": validation_episodes,
+            "frames": validation_frames,
+            "bytes": validation_bytes,
+            "kind": "generated_holdout",
+            "tasks": [
+                {"uid": os.path.splitext(os.path.basename(path))[0],
+                 "sha256": sha256_file(path),
+                 "trace_fingerprint": task_fingerprint(path)}
+                for path in validation_paths
+            ],
+        }
+    else:
+        _atomic_copy(validation, val_out)
+        validation_sha = sha256_file(validation)
+        if sha256_file(val_out) != validation_sha:
+            raise RuntimeError("copied validation shard hash changed")
+        validation_info = {
+            "file": os.path.relpath(val_out, out_dir),
+            "sha256": validation_sha,
+            "episodes": len(shard_uids(validation)),
+            "kind": "copied",
+        }
 
     train_paths = (accepted if train_mode == "generated_only"
                    else baseline_paths + accepted)
@@ -452,6 +519,7 @@ def build_release(*, trace_paths: list[str], batch_id: str, out_dir: str,
         "expected_candidate_files": expected_candidates,
         "raw_candidate_files": len(trace_paths),
         "candidate_episodes": len(candidate_paths),
+        "holdout_validation_count": holdout_validation_count,
         "accepted_generated_episodes": len(accepted),
         "accepted_generated_tasks": [
             {
@@ -462,11 +530,7 @@ def build_release(*, trace_paths: list[str], batch_id: str, out_dir: str,
             }
             for path in accepted
         ],
-        "validation": {
-            "file": os.path.relpath(val_out, out_dir),
-            "sha256": validation_sha,
-            "episodes": len(shard_uids(validation)),
-        },
+        "validation": validation_info,
         "train_shards": shard_rows,
         "train_scaling_prefixes": scaling_prefixes,
         "diversity_summary": diversity_summary,
@@ -500,6 +564,8 @@ def _parse_args(argv=None):
                    default="baseline_plus_generated")
     p.add_argument("--expected-candidates", type=int,
                    help="refuse a live/incomplete trace snapshot with another count")
+    p.add_argument("--holdout-validation-count", type=int, default=0,
+                   help="reserve this many generated candidates as a disjoint validation shard")
     return p.parse_args(argv)
 
 
@@ -515,6 +581,7 @@ def main(argv=None):
         target_frames=args.target_frames, min_distance=args.min_distance,
         codec=args.codec, train_mode=args.train_mode,
         expected_candidates=args.expected_candidates,
+        holdout_validation_count=args.holdout_validation_count,
     )
 
 
