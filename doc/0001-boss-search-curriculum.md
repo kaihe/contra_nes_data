@@ -336,6 +336,31 @@ PYTHONPATH=src python -m task_maker.boss_release \
   --min-distance 0
 ```
 
+## 11. Spread search throughput grid
+
+The Spread full-fight search benchmark optimizes replay-verified wins per wall
+clock hour on the local 32-logical-CPU machine. CPU consumption is deliberately
+not part of the objective, so every cell uses 28 workers. Benchmark traces and
+attempt-level JSONL stay under `tmp/boss-spread-grid/` and never enter the
+production candidate directory implicitly.
+
+The screening grid crosses `rollouts={16,32,64}`,
+`(rollout_len,settle_margin)={(24,8),(36,12),(48,16)}`, and
+`max_rewind={15,30,45}` while holding `max_time=90`, `max_actions=1000`,
+`goal=level_up`, frame skip 3 and the clean reward fixed. Each of the 27 cells
+gets 12 attempts, scheduled in shuffled rounds so machine drift affects all
+cells similarly. Attempts, rather than wins, are fixed so failed searches and
+timeouts count against throughput.
+
+Screening configurations with 12/12 replay-valid wins are ranked by total wins
+divided by total end-to-end wall time. Confirmation runs 100 attempts for the
+four fastest non-baseline cells plus the current `64/48/16/30` baseline. The
+winner must replay successfully on every saved trace, win at least 95/100
+confirmation attempts, produce no exact action/state duplicates, and keep
+median nearest-neighbour diversity within 10% of the current Spread median
+0.1152. Mean wall seconds per valid win is primary; p90 wall time breaks close
+ties.
+
 ## Appendix — provenance
 
 | claim | source |
@@ -350,3 +375,4 @@ PYTHONPATH=src python -m task_maker.boss_release \
 | 200 candidates, diversity percentiles and 666-episode release counts | `game_trace/releases/boss-full-v1/manifest.json` |
 | pure release has 2,034 tasks from four fixed starting states | `game_trace/releases/boss-pure-v1/manifest.json` and accepted task metadata |
 | mixed v2 has 466 baseline + 2,034 generated train episodes and unchanged 57-example validation | `game_trace/releases/boss-mixed-v2/manifest.json` |
+| 7-worker and 28-worker Spread timing cohorts contain 500 and 50 wins | raw `search_wall_s`, `workers` and `trace_steps` metadata scanned on 2026-08-07 |
