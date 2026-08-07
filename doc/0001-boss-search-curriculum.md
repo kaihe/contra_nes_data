@@ -1,6 +1,6 @@
 # Add a train-only boss-search curriculum without changing validation
 
-Status: Proposed
+Status: Implemented
 
 **Question.** How should level-1 boss demonstrations be diversified without
 changing the frozen validation set or losing the source-trace split boundary?
@@ -404,6 +404,14 @@ full-fight state bank, replay each selected raw win before export, reject exact
 state/action duplicates, and record task and shard hashes in its immutable
 manifest. At the 60,000-decision-frame target, expect several deterministic
 Spread-only train shards rather than one oversized tar.
+
+The 2026-08-07 build accepted all 1,374 candidates with no exact duplicates.
+It produced three Spread-only shards of 458 episodes and 40,472 decision frames
+each (121,416 train frames total). All three tar hashes match the immutable
+manifest. The copied validation tar has 57 episodes, its SHA-256 matches both
+the source `game_trace/hf/boss-val-00000.tar` and the release copy, and its UID
+set is unchanged. The completed local release occupies 1.1 GB at
+`game_trace/releases/boss-spread-v1/`.
 
 ## Appendix — provenance
 
