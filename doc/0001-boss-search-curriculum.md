@@ -336,6 +336,60 @@ PYTHONPATH=src python -m task_maker.boss_release \
   --min-distance 0
 ```
 
+## 11. Spread search throughput grid
+
+The Spread full-fight search benchmark optimizes replay-verified wins per wall
+clock hour on the local 32-logical-CPU machine. CPU consumption is deliberately
+not part of the objective, so every cell uses 28 workers. Benchmark traces and
+attempt-level JSONL stay under `tmp/boss-spread-grid/`. Every replay-valid win
+is also atomically promoted to `game_trace/mc_trace/boss_level1/` with its grid
+stage, configuration, attempt and fingerprint in its provenance. A fingerprint
+index prevents benchmark repeats or existing production traces from being
+copied twice, so successful search work is retained without introducing exact
+duplicates.
+
+The screening grid crosses `rollouts={16,32,64}`,
+`(rollout_len,settle_margin)={(24,8),(36,12),(48,16)}`, and
+`max_rewind={15,30,45}` while holding `max_time=90`, `max_actions=1000`,
+`goal=level_up`, frame skip 3 and the clean reward fixed. Each of the 27 cells
+gets 12 attempts, scheduled in shuffled rounds so machine drift affects all
+cells similarly. Attempts, rather than wins, are fixed so failed searches and
+timeouts count against throughput.
+
+Screening configurations with 12/12 replay-valid wins are ranked by total wins
+divided by total end-to-end wall time. Confirmation runs 100 attempts for the
+four fastest non-baseline cells plus the current `64/48/16/30` baseline. The
+winner must replay successfully on every saved trace, win at least 95/100
+confirmation attempts, produce no exact action/state duplicates, and keep
+median nearest-neighbour diversity within 10% of the current Spread median
+0.1152. Mean wall seconds per valid win is primary; p90 wall time breaks close
+ties.
+
+The 2026-08-07 run completed all 324 screening and 500 confirmation
+attempts. Every attempt won, replayed successfully, and had a unique
+state/action fingerprint. The fastest confirmation cell was
+`rollouts=16`, `rollout_len=24`, `settle_margin=8`, `max_rewind=15`: 438.9
+valid wins/hour, 8.20 mean seconds/win, and 9.64 seconds p90. The
+`64/48/16/30` baseline reached 262.3 wins/hour, 13.72 mean seconds/win, and
+20.27 seconds p90, so the fast cell improved observed wall-clock throughput by
+1.67x.
+
+No cell is declared the quality-qualified winner because all five confirmation
+cohorts missed the predeclared diversity gate of 0.1037. Their median nearest
+prior-neighbour distances were 0.0967 (`16/24/8/15`), 0.0903
+(`16/24/8/45`), 0.0993 (`16/36/12/30`), 0.1007 (`16/36/12/45`), and 0.1032
+for the baseline. The baseline itself missed by 0.0005, showing that the fixed
+10% gate is sensitive to the larger reference bank, but the faster cells are
+not promoted to recommended defaults without a new, predeclared quality test.
+The attempt log, aggregate summary, and diversity report are retained under
+`tmp/boss-spread-grid/`.
+
+All 824 valid benchmark wins were nevertheless promoted atomically to the raw
+boss trace bank. The post-run audit found 2,858 full-fight files, 2,858 unique
+fingerprints, no non-win outcomes, no missing promoted files, and no temporary
+copy remnants. These traces remain available for later dataset construction;
+failing the diversity gate does not discard valid gameplay.
+
 ## Appendix — provenance
 
 | claim | source |
@@ -350,3 +404,5 @@ PYTHONPATH=src python -m task_maker.boss_release \
 | 200 candidates, diversity percentiles and 666-episode release counts | `game_trace/releases/boss-full-v1/manifest.json` |
 | pure release has 2,034 tasks from four fixed starting states | `game_trace/releases/boss-pure-v1/manifest.json` and accepted task metadata |
 | mixed v2 has 466 baseline + 2,034 generated train episodes and unchanged 57-example validation | `game_trace/releases/boss-mixed-v2/manifest.json` |
+| 7-worker and 28-worker Spread timing cohorts contain 500 and 50 wins | raw `search_wall_s`, `workers` and `trace_steps` metadata scanned on 2026-08-07 |
+| Spread grid completed 824/824 valid unique wins; confirmation timing, diversity, and full-bank audit | `tmp/boss-spread-grid/{results.jsonl,summary.json,diversity.json}` on 2026-08-07 |
