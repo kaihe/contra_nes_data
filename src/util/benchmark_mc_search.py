@@ -1,11 +1,13 @@
 """Resumable fixed-attempt throughput benchmark for the Level-1 Spread boss.
 
-The benchmark deliberately writes to ``tmp/`` rather than the production trace
-tree.  Screening interleaves a shuffled round of all 27 parameter cells before
-starting the next round, then confirmation compares the four fastest perfect
-screening cells with the current baseline.  Search wall time includes emulator
-and worker-pool setup plus trace serialization; replay verification is measured
-separately and acts only as a validity gate.
+The benchmark writes its resumable working set to ``tmp/``. Every replay-valid,
+fingerprint-unique win is also copied atomically into the production trace tree,
+so useful searches are retained without duplicating existing data. Screening
+interleaves a shuffled round of all 27 parameter cells before starting the next
+round, then confirmation compares the four fastest perfect screening cells with
+the current baseline. Search wall time includes emulator and worker-pool setup
+plus trace serialization; replay verification is measured separately and acts
+only as a validity gate.
 
 Usage::
 
@@ -20,6 +22,7 @@ import hashlib
 import json
 import os
 import random
+import shutil
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -155,9 +158,41 @@ def replay_trace(path: Path) -> tuple[bool, str, int, int, float]:
             len(actions), sampled, search_wall)
 
 
+def production_index(directory: Path) -> dict[str, Path]:
+    """Index full-fight production traces by exact state+action fingerprint."""
+    index = {}
+    if not directory.exists():
+        return index
+    for path in sorted(directory.glob("win_boss_level1_full_*.npz")):
+        with np.load(path, allow_pickle=True) as data:
+            initial_state = bytes(data["initial_state"])
+            actions = np.asarray(data["actions"], dtype=np.uint8)
+        fingerprint = hashlib.sha256(initial_state + actions.tobytes()).hexdigest()
+        index.setdefault(fingerprint, path)
+    return index
+
+
+def promote_trace(path: Path, *, stage: str, config: SearchConfig, attempt: int,
+                  fingerprint: str, directory: Path,
+                  known: dict[str, Path]) -> tuple[str, str]:
+    """Atomically retain a valid grid win, without copying an exact duplicate."""
+    if fingerprint in known:
+        return "existing", str(known[fingerprint])
+    directory.mkdir(parents=True, exist_ok=True)
+    name = (f"win_boss_level1_full_spread_grid-{stage}-{config.uid}-"
+            f"a{attempt:03d}-{fingerprint[:16]}.npz")
+    destination = directory / name
+    temporary = destination.with_suffix(destination.suffix + ".tmp")
+    shutil.copyfile(path, temporary)
+    os.replace(temporary, destination)
+    known[fingerprint] = destination
+    return "promoted", str(destination)
+
+
 def run_attempt(*, config: SearchConfig, stage: str, attempt: int,
                 sequence: int, state: bytes, metadata: dict, out: Path,
-                workers: int, max_time: int, max_actions: int) -> dict:
+                workers: int, max_time: int, max_actions: int,
+                production_dir: Path, known: dict[str, Path]) -> dict:
     trace_path = out / "traces" / stage / config.uid / f"attempt-{attempt:03d}.npz"
     trace_path.parent.mkdir(parents=True, exist_ok=True)
     started = time.perf_counter()
@@ -178,11 +213,18 @@ def run_attempt(*, config: SearchConfig, stage: str, attempt: int,
     trace_steps = sampled_actions = None
     search_wall = None
     verify_wall = 0.0
+    promotion_status = None
+    production_trace_path = None
     if won:
         verify_started = time.perf_counter()
         replay_valid, fingerprint, trace_steps, sampled_actions, search_wall = \
             replay_trace(trace_path)
         verify_wall = time.perf_counter() - verify_started
+        if replay_valid:
+            promotion_status, production_trace_path = promote_trace(
+                trace_path, stage=stage, config=config, attempt=attempt,
+                fingerprint=fingerprint, directory=production_dir, known=known,
+            )
     return {
         "stage": stage,
         "config_id": config.uid,
@@ -201,6 +243,8 @@ def run_attempt(*, config: SearchConfig, stage: str, attempt: int,
         "sampled_actions": sampled_actions,
         "fingerprint": fingerprint,
         "trace_path": str(trace_path) if won else None,
+        "promotion_status": promotion_status,
+        "production_trace_path": production_trace_path,
     }
 
 
@@ -220,6 +264,7 @@ def write_summary(path: Path, rows: list[dict], screen_attempts: int,
 def run_stage(*, stage: str, configs: list[SearchConfig], attempts: int,
               seed: int, state: bytes, metadata: dict, out: Path,
               workers: int, max_time: int, max_actions: int,
+              production_dir: Path, known: dict[str, Path],
               rows: list[dict]) -> list[dict]:
     done = {(r["stage"], r["config_id"], int(r["attempt"])) for r in rows}
     schedule = list(round_schedule(configs, attempts, seed))
@@ -233,6 +278,7 @@ def run_stage(*, stage: str, configs: list[SearchConfig], attempts: int,
             config=config, stage=stage, attempt=attempt, sequence=sequence,
             state=state, metadata=metadata, out=out, workers=workers,
             max_time=max_time, max_actions=max_actions,
+            production_dir=production_dir, known=known,
         )
         append_row(out / "results.jsonl", row)
         rows.append(row)
@@ -249,6 +295,8 @@ def parse_args(argv=None):
                         default="all")
     parser.add_argument("--state", default=DEFAULT_STATE)
     parser.add_argument("--out", default=DEFAULT_OUT)
+    parser.add_argument("--production-dir",
+                        default="game_trace/mc_trace/boss_level1")
     parser.add_argument("--workers", type=int, default=28)
     parser.add_argument("--screen-attempts", type=int, default=12)
     parser.add_argument("--confirm-attempts", type=int, default=100)
@@ -267,13 +315,18 @@ def main(argv=None) -> None:
     out.mkdir(parents=True, exist_ok=True)
     state, metadata = load_initial_state(args.state)
     rows = read_rows(out / "results.jsonl")
+    production_dir = Path(args.production_dir)
+    known = production_index(production_dir)
+    print(f"indexed {len(known)} existing full-fight production fingerprints",
+          flush=True)
 
     if args.stage in ("screen", "all"):
         rows = run_stage(
             stage="screen", configs=screening_configs(),
             attempts=args.screen_attempts, seed=args.seed, state=state,
             metadata=metadata, out=out, workers=args.workers,
-            max_time=args.max_time, max_actions=args.max_actions, rows=rows,
+            max_time=args.max_time, max_actions=args.max_actions,
+            production_dir=production_dir, known=known, rows=rows,
         )
     if args.stage in ("confirm", "all"):
         screen = summarize(rows, "screen")
@@ -282,7 +335,8 @@ def main(argv=None) -> None:
             stage="confirm", configs=configs, attempts=args.confirm_attempts,
             seed=args.seed + 1, state=state, metadata=metadata, out=out,
             workers=args.workers, max_time=args.max_time,
-            max_actions=args.max_actions, rows=rows,
+            max_actions=args.max_actions, production_dir=production_dir,
+            known=known, rows=rows,
         )
     write_summary(out / "summary.json", rows, args.screen_attempts,
                   args.confirm_attempts)

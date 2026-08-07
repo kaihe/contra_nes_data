@@ -1,9 +1,14 @@
-import json
+import hashlib
+from pathlib import Path
+
+import numpy as np
 
 from util.benchmark_mc_search import (
     BASELINE,
     SearchConfig,
     confirmation_configs,
+    production_index,
+    promote_trace,
     round_schedule,
     screening_configs,
     summarize,
@@ -75,3 +80,30 @@ def test_confirmation_selects_four_fastest_perfect_cells_plus_baseline():
     selected = confirmation_configs(screen, attempts=12)
 
     assert selected == candidates[:4] + [BASELINE]
+
+
+def test_promotion_is_atomic_and_deduplicates_existing_fingerprint(tmp_path):
+    source = tmp_path / "source.npz"
+    initial = np.arange(8, dtype=np.uint8)
+    actions = np.zeros((2, 9), dtype=np.uint8)
+    np.savez_compressed(source, initial_state=initial, actions=actions)
+    fingerprint = hashlib.sha256(bytes(initial) + actions.tobytes()).hexdigest()
+    production = tmp_path / "production"
+    known = {}
+    config = SearchConfig(16, 24, 8, 15)
+
+    first_status, first_path = promote_trace(
+        source, stage="screen", config=config, attempt=0,
+        fingerprint=fingerprint, directory=production, known=known,
+    )
+    second_status, second_path = promote_trace(
+        source, stage="screen", config=config, attempt=1,
+        fingerprint=fingerprint, directory=production, known=known,
+    )
+
+    assert first_status == "promoted"
+    assert second_status == "existing"
+    assert first_path == second_path
+    assert len(list(production.glob("*.npz"))) == 1
+    assert not list(production.glob("*.tmp"))
+    assert production_index(production) == {fingerprint: Path(first_path)}
