@@ -398,16 +398,20 @@ def build_release(*, trace_paths: list[str], batch_id: str, out_dir: str,
     )
     if holdout_validation_count and len(candidate_paths) != len(trace_paths):
         raise ValueError("raw candidates included exact duplicates before holdout split")
-    train_candidates, validation_paths = split_holdout_paths(
+    train_sources, validation_sources = split_holdout_paths(
         candidate_paths, holdout_validation_count) if holdout_validation_count \
         else (candidate_paths, [])
+    release_path_by_source = {}
     for path in candidate_paths:
         seg = load_task(path)
         seg.meta["source_split"] = seg.split
-        seg.meta["release_partition"] = "validation" if path in validation_paths else "train"
-        if path in validation_paths:
+        seg.meta["release_partition"] = "validation" if path in validation_sources else "train"
+        if path in validation_sources:
             seg.split = "val"
-        write_segment(seg, task_root)
+        release_path_by_source[path] = write_segment(seg, task_root)
+    candidate_paths = [release_path_by_source[path] for path in candidate_paths]
+    train_candidates = [release_path_by_source[path] for path in train_sources]
+    validation_paths = [release_path_by_source[path] for path in validation_sources]
     baseline_paths = task_paths_for_uids(shard_uids(baseline_train), task_pattern)
     accepted, diversity = select_diverse(
         train_candidates, baseline_paths, min_distance=min_distance)
