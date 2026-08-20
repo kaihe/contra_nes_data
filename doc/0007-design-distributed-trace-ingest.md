@@ -1,6 +1,6 @@
 # Commit immutable trace batches to Google Cloud Storage
 
-Status: Proposed
+Status: Accepted
 
 **Question.** How should many CPU workers publish MC wins to shared cloud
 storage without losing traces, creating duplicates, or exposing partial uploads?
