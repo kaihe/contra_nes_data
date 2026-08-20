@@ -46,6 +46,7 @@ from agent.reward import compute_reward
 from agent.sampler import ActionSampler
 from env.constant import ADDR_LEVEL, ADDR_LEVEL_ROUTINE
 from env.event import event_by_tag
+from env.utility import boss_scene
 from util.replay import GAME, INTTYPE, SKIP as REPLAY_SKIP, rewind_state, scan_events, step_env
 
 # ── Constants ───────────────────────────────────────────────────────────────────
@@ -314,6 +315,8 @@ class _Search:
         """Win condition. level_up fires on the post-boss transition edge (the
         level is cleared there); `new_level != level` is a fallback for levels
         that increment without that routine."""
+        if self.goal == "boss_entry":
+            return bool(boss_scene(cur) and not boss_scene(pre))
         if self.goal == "game_clear":
             return bool(EV_GAME_CLEAR.trigger(pre, cur))
         return bool(EV_LEVEL_TRANSITION.trigger(pre, cur)) or new_level != self.level
@@ -375,6 +378,7 @@ def save_trace(initial_state_for_npz: bytes, actions: list, trace_path: str,
                max_time: int | None = None, max_rewind: int | None = None,
                max_actions: int | None = None, goal: str | None = None,
                workers: int | None = None, reward_config: str | None = None,
+               prior_sha256: str | None = None,
                metadata: dict | None = None) -> None:
     """Save a winning trace (actions + start state + search metadata) to NPZ."""
     os.makedirs(os.path.dirname(trace_path), exist_ok=True)
@@ -398,6 +402,7 @@ def save_trace(initial_state_for_npz: bytes, actions: list, trace_path: str,
         goal=np.array("" if goal is None else goal),
         workers=_i32(workers),
         reward_config=np.array("" if reward_config is None else reward_config),
+        prior_sha256=np.array("" if prior_sha256 is None else prior_sha256),
     )
     for key, value in (metadata or {}).items():
         if key in payload:
@@ -472,6 +477,7 @@ def _run_one_search(level, rollouts, rollout_len, max_time, max_rewind, max_acti
         rollouts=rollouts, rollout_len=rollout_len, max_time=max_time,
         max_rewind=max_rewind, max_actions=max_actions, goal=goal,
         workers=workers, reward_config=sampler.reward_config.name,
+        prior_sha256=sampler.prior_sha256,
         metadata=trace_metadata,
     )
     if prefix:
@@ -541,8 +547,10 @@ def _parse_args():
                    help="Abandon a trace exceeding this many committed actions (default: 6000)")
     p.add_argument("--max-time", type=int, default=600, help="Per-search time budget (s)")
     p.add_argument("--workers", type=int, default=os.cpu_count())
-    p.add_argument("--goal", type=str, default="level_up", choices=["level_up", "game_clear"],
-                   help="level_up: stop on level transition (default); game_clear: full clear")
+    p.add_argument("--goal", type=str, default="level_up",
+                   choices=["boss_entry", "level_up", "game_clear"],
+                   help="boss_entry: stop on boss-scene entry; level_up: stop on level "
+                        "transition (default); game_clear: full clear")
     p.add_argument("--runs", type=int, default=1,
                    help="Number of winning traces to collect; loops the search (default: 1)")
     p.add_argument("--initial-state", type=str,

@@ -50,6 +50,4 @@ costs:
   # R omitted -> 0: forward is the canonical action, never penalised
 
 prior:
-  traces: "game_trace/mc_trace/level1/*.npz"  # glob, relative to the repo root
-  mode: bigram     # bigram = P(next|prev) ; unigram = marginal P(action)
-  smooth: 0.0      # blend toward uniform in [0,1]; keeps rare actions explorable
+  artifact: "priors/level1.yaml"

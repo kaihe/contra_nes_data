@@ -3,18 +3,14 @@
 Owns everything ``agent.mc_search`` needs to *propose* actions during one search:
 
   * the level's action table (``agent/level<N>.yaml``, else ``baseline.yaml``),
-  * the action **prior** for that level as a row-stochastic PMF, built on the fly
-    from the trace glob in the level YAML's ``prior:`` block — bigram
-    P(next | prev) or unigram P(action) — so it is always fresh against the
-    current action table (a table edit needs no rebuild),
+  * the action **prior** for that level as a row-stochastic PMF, loaded from a
+    compact versioned artifact (Level 1) or built from a trace glob for legacy
+    level configs,
   * masked sampling from that prior against the stateful legal-action mask
     (``agent.action_mask.legal_mask``), and
   * the random **rollout** the Monte-Carlo lookahead scores.
 
-It also carries the ``agent.reward.RewardConfig`` used to score a rollout, so a
-single object crosses into each worker process. Built once per search by
-:meth:`ActionSampler.for_level` and rebuilt identically inside every worker (it
-derives purely from on-disk config), so it never has to be pickled.
+It also carries the ``agent.reward.RewardConfig`` used to score a rollout.
 
 A level YAML holds the action table (``skip`` + ``actions``, parsed by
 :class:`agent.action.ActionSpace`) plus two optional blocks::
@@ -23,15 +19,14 @@ A level YAML holds the action table (``skip`` + ``actions``, parsed by
       F: -0.02
       J: -0.02
     prior:
-      traces: "game_trace/mc_trace/level1/*.npz"   # glob, relative to repo root
-      mode: bigram         # bigram = P(next|prev) ; unigram = marginal P(action)
-      smooth: 0.0          # blend toward uniform in [0, 1]
+      artifact: "priors/level1.yaml"  # relative to the agent package
 
 Levels without a YAML fall back to the baseline table with default costs and a
 uniform prior.
 """
 
 import glob
+import hashlib
 import os
 from dataclasses import dataclass, field
 
@@ -49,7 +44,7 @@ from util.replay import SKIP as REPLAY_SKIP, rewind_state, step_env
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 ALLOWED_COST_KEYS = set(BUTTON_BITS)
-ALLOWED_PRIOR_KEYS = {"traces", "mode", "smooth"}
+ALLOWED_PRIOR_KEYS = {"artifact", "traces", "mode", "smooth"}
 
 EV_PLAYER_DIE = event_by_tag("die")
 
@@ -119,6 +114,40 @@ def _uniform_pmf(n: int) -> np.ndarray:
     return np.full((n, n), 1.0 / n, dtype=np.float32)
 
 
+def _bigram_pmf(counts: np.ndarray) -> np.ndarray:
+    """Normalize integer transition counts; unseen rows remain explorable."""
+    n = len(counts)
+    row_sums = counts.sum(axis=1, keepdims=True).astype(np.float64)
+    return np.divide(counts, row_sums, out=np.full(counts.shape, 1.0 / n),
+                     where=row_sums > 0).astype(np.float32)
+
+
+def action_table_sha256(actions: np.ndarray) -> str:
+    """Stable identity of the ordered NES button vectors behind a prior."""
+    return hashlib.sha256(np.asarray(actions, dtype=np.uint8).tobytes()).hexdigest()
+
+
+def load_prior_artifact(path: str, actions: np.ndarray,
+                        names: tuple[str, ...]) -> tuple[np.ndarray, str]:
+    """Load and strictly validate a versioned integer bigram matrix."""
+    raw_bytes = open(path, "rb").read()
+    raw = yaml.safe_load(raw_bytes)
+    if raw.get("format_version") != 1 or raw.get("mode") != "bigram":
+        raise ValueError(f"unsupported prior artifact format: {path}")
+    if tuple(raw.get("action_names", ())) != tuple(names):
+        raise ValueError(f"prior action names do not match Level {raw.get('level')}: {path}")
+    expected = action_table_sha256(actions)
+    if raw.get("action_table_sha256") != expected:
+        raise ValueError(f"prior action table digest does not match: {path}")
+    counts = np.asarray(raw.get("transition_counts"), dtype=np.int64)
+    shape = (len(actions), len(actions))
+    if counts.shape != shape or np.any(counts < 0):
+        raise ValueError(f"prior counts are {counts.shape}, expected nonnegative {shape}")
+    if int(counts.sum()) != int(raw.get("included_pairs", -1)):
+        raise ValueError(f"prior included_pairs does not match counts: {path}")
+    return _bigram_pmf(counts), hashlib.sha256(raw_bytes).hexdigest()
+
+
 def build_prior(table: np.ndarray, files: list[str], mode: str = "bigram",
                 smooth: float = 0.0, verbose: bool = False) -> np.ndarray:
     """Count `files` into an (N, N) row-stochastic prior over `table`'s actions.
@@ -167,9 +196,7 @@ def build_prior(table: np.ndarray, files: list[str], mode: str = "bigram",
               f"actions={n}  mode={mode}  smooth={smooth}")
 
     if mode == "bigram":
-        row_sums = trans.sum(axis=1, keepdims=True).astype(np.float64)
-        probs = np.divide(trans, row_sums, out=np.full(trans.shape, 1.0 / n),
-                          where=row_sums > 0)
+        probs = _bigram_pmf(trans)
     else:
         total = visits.sum()
         marginal = visits / total if total > 0 else np.full(n, 1.0 / n)
@@ -186,13 +213,14 @@ class ActionSampler:
 
     def __init__(self, level: int, actions: np.ndarray, names: tuple,
                  reward_config: RewardConfig, prior_pmf: np.ndarray,
-                 uniform_pmf: np.ndarray):
+                 uniform_pmf: np.ndarray, prior_sha256: str = ""):
         self.level = level                  # the level this prior/action set is for
         self.actions = actions              # (N, 9) uint8 button vectors
         self.names = names                  # action labels, parallel to `actions`
         self.reward_config = reward_config  # scores each rollout step
         self.prior_pmf = prior_pmf          # (N, N) prior for `level` (uniform if none)
         self.uniform_pmf = uniform_pmf      # used for any other level (game_clear crossing)
+        self.prior_sha256 = prior_sha256    # immutable artifact identity, empty for legacy
         self._index_by_bytes = {a.tobytes(): i for i, a in enumerate(actions)}
 
     @staticmethod
@@ -223,6 +251,13 @@ class ActionSampler:
         """Build the sampler from the level YAML, prior included (uniform if none)."""
         cfg, actions, names, reward = cls._level_config(level)
         p = cfg.prior
+        if p.get("artifact"):
+            if p.get("traces"):
+                raise ValueError(f"Level{level} prior cannot set artifact and traces")
+            path = os.path.join(os.path.dirname(__file__), p["artifact"])
+            prior, digest = load_prior_artifact(path, actions, names)
+            uniform = _uniform_pmf(len(actions))
+            return cls(level, actions, names, reward, prior, uniform, digest)
         pattern = os.path.join(REPO_ROOT, p["traces"]) if p.get("traces") else None
         files = sorted(glob.glob(pattern)) if pattern else []
         if pattern and not files:

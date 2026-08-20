@@ -19,4 +19,4 @@ where = ["src"]
 
 # Ship action configs plus the reproducible spread-gun and boss start-state banks.
 [tool.setuptools.package-data]
-agent = ["*.yaml", "states/*/*.state", "states/*/*.yaml"]
+agent = ["*.yaml", "priors/*.yaml", "states/*/*.state", "states/*/*.yaml"]

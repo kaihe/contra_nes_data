@@ -62,6 +62,7 @@ def test_search_can_start_from_supplied_savestate(tmp_path, monkeypatch):
     with np.load(trace_path, allow_pickle=True) as d:
         assert bytes(d["initial_state"]) == b"boss-state"
         assert str(d["src_trace"]) == "root.npz"
+        assert str(d["prior_sha256"]) == ActionSampler.for_level(1).prior_sha256
 
 
 def test_load_initial_state_checks_manifest_and_returns_lineage(tmp_path):
@@ -112,3 +113,13 @@ class FakeEnv:
 
     def close(self):
         pass
+
+
+def test_boss_entry_goal_fires_only_on_scene_edge(monkeypatch):
+    search = object.__new__(mc_search._Search)
+    search.goal = "boss_entry"
+    monkeypatch.setattr(mc_search, "boss_scene", lambda ram: bool(ram[0]))
+
+    assert search._reached_goal(np.array([0]), np.array([1]), 1)
+    assert not search._reached_goal(np.array([1]), np.array([1]), 1)
+    assert not search._reached_goal(np.array([0]), np.array([0]), 1)
