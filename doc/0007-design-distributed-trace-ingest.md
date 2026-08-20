@@ -5,8 +5,9 @@ Status: Proposed
 **Question.** How should many CPU workers publish MC wins to shared cloud
 storage without losing traces, creating duplicates, or exposing partial uploads?
 
-**Answer.** Google Cloud Storage (GCS) is the primary durable store. Each worker saves wins
-atomically on local disk and closes a batch at exactly 100 traces. It uploads a
+**Answer.** Google Cloud Storage (GCS) is the primary durable store. Each live worker saves wins
+atomically on local disk and closes a batch at exactly 100 traces; finite canonical
+archives close at 1,000 traces. Each producer uploads a
 compressed archive and manifest with create-only object preconditions, then
 creates `COMMITTED.json` as the visibility
 boundary. One ingester validates committed batches, deduplicates trace
@@ -50,6 +51,11 @@ gs://<bucket>/contra-mc-tracehouse/
         COMMITTED.json
       acknowledgements/<worker_id>/<batch_id>.json
       quarantine/<batch_id>.json
+    level1/boss/
+      batches/<collection_id>/<batch_id>/
+        traces.tar.zst
+        manifest.json
+        COMMITTED.json
 ```
 
 `run.json` records code commit, search configuration, prior digest, worker
@@ -60,6 +66,10 @@ sampled actions, deaths, wall-clock time, and initial-state/config provenance.
 Full traces also carry `boss_weapon`, `boss_rapid`, and zero-based
 `boss_entry_step`, captured from RAM at the boss-scene edge. This makes Spread
 and rapid-fire filtering a metadata query rather than an ingestion-time replay.
+Every trace records `trace_scope`: `full_level` beneath `level1/full` and
+`boss_fight` beneath `level1/boss`. The physical prefix prevents accidental
+mixed loading; the manifest field lets catalogs classify traces without relying
+on object paths or initial-state hashes.
 
 ## Legacy trace replay and source preservation
 
@@ -70,8 +80,10 @@ the source file. Legacy traces missing boss loadout fields are replayed once wit
 one persistent emulator, except boss-start traces whose equivalent legacy
 `weapon` and `rapid` fields can be mapped directly; recovered `boss_weapon`, `boss_rapid`, and
 `boss_entry_step` are written into the batch manifest while the archived NPZ
-remains byte-identical. Import closes normal 100-trace batches and explicitly
-flushes its final partial batch.
+remains byte-identical. Imports accept an explicit source list for catalog-selected
+collections. Canonical bulk archives close at 1,000 traces and explicitly flush
+their final partial batch; live worker batches remain 100 traces for bounded loss
+and upload latency.
 
 Every GCS object name is unique within a bucket. Uploads use
 `if_generation_match=0`, so retries cannot overwrite an existing object. Object
