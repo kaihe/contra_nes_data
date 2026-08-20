@@ -13,7 +13,11 @@ for command in sqlite3 zstd; do
 done
 test -r "${catalog}" || { echo "missing catalog: ${catalog}" >&2; exit 2; }
 test -d "${trace_root}" || { echo "missing trace root: ${trace_root}" >&2; exit 2; }
-test -x "${python_bin}" || { echo "missing Python: ${python_bin}" >&2; exit 2; }
+if [[ "${python_bin}" == */* ]]; then
+  test -x "${python_bin}" || { echo "missing Python: ${python_bin}" >&2; exit 2; }
+else
+  command -v "${python_bin}" >/dev/null || { echo "missing Python: ${python_bin}" >&2; exit 2; }
+fi
 : "${GOOGLE_APPLICATION_CREDENTIALS:?set GOOGLE_APPLICATION_CREDENTIALS to the GCS uploader key}"
 
 selection_sql() {
