@@ -1,14 +1,14 @@
-# Commit immutable trace batches to Google Drive
+# Commit immutable trace batches to Google Cloud Storage
 
 Status: Proposed
 
 **Question.** How should many CPU workers publish MC wins to shared cloud
 storage without losing traces, creating duplicates, or exposing partial uploads?
 
-**Answer.** Google Drive is the primary durable store. Each worker saves wins
+**Answer.** Google Cloud Storage (GCS) is the primary durable store. Each worker saves wins
 atomically on local disk and closes a batch at exactly 100 traces. It uploads a
-compressed archive and manifest through
-resumable Drive API sessions, then creates `COMMITTED.json` as the visibility
+compressed archive and manifest with create-only object preconditions, then
+creates `COMMITTED.json` as the visibility
 boundary. One ingester validates committed batches, deduplicates trace
 fingerprints, and owns canonical metadata. Workers never write shared SQLite or
 derive their action prior from live output.
@@ -20,7 +20,7 @@ derive their action prior from live output.
 | role | responsibility |
 |---|---|
 | worker | search, atomic local save, batch, resumable upload, retain until acknowledged |
-| Google Drive | primary durable batch, manifest, marker, and acknowledgement storage |
+| GCS | primary durable batch, manifest, marker, and acknowledgement storage |
 | ingester | validate, deduplicate, publish canonical raw traces and metadata |
 | datahouse builder | consume canonical traces and produce token shards later |
 
@@ -28,17 +28,18 @@ Every launch has a random `run_id`, each machine a stable `worker_id`, and every
 upload a random `batch_id`. A trace's identity is the SHA-256 fingerprint of
 normalized initial state, actions, frame skip, level, and goal—not its filename.
 
-Workers authenticate with an OAuth refresh token kept outside Git and search
-configuration. The first implementation may distribute one encrypted
-`rclone`/Drive credential to trusted workers. A later upload gateway may keep
-the credential on one stable host without changing the batch format.
+Workers authenticate through Application Default Credentials. A GCP worker uses
+an attached service account; a worker on another cloud prefers Workload Identity
+Federation and may use a narrowly scoped service-account key only during initial
+deployment. Workers receive bucket-level Object Creator and Object Viewer roles,
+not bucket administration or object deletion.
 
-## Google Drive layout and file identity
+## GCS layout and object identity
 
-The Google AI Pro account owns one dedicated root folder:
+One dedicated bucket contains the tracehouse prefix:
 
 ```text
-Contra MC Tracehouse/
+gs://<bucket>/contra-mc-tracehouse/
   schema-v1/
     level1/full/
       priors/<prior_sha256>/level1.yaml
@@ -60,11 +61,11 @@ Full traces also carry `boss_weapon`, `boss_rapid`, and zero-based
 `boss_entry_step`, captured from RAM at the boss-scene edge. This makes Spread
 and rapid-fire filtering a metadata query rather than an ingestion-time replay.
 
-Google Drive permits duplicate names, so paths are not identity. Bootstrap
-records the Drive folder ID for `schema-v1`; journals and markers record all
-parent/file IDs. Files carry `run_id`, `worker_id`, and `batch_id` as Drive
-`appProperties`. A retry queries those properties before creating a file. Two
-files with one batch ID are duplicates and conflicting copies are quarantined.
+Every GCS object name is unique within a bucket. Uploads use
+`if_generation_match=0`, so retries cannot overwrite an existing object. Object
+metadata carries `run_id`, `worker_id`, `batch_id`, and schema version. A retry
+accepts an existing object only when its size and checksum match; a mismatch is
+quarantined.
 
 ## Resumable worker commit protocol
 
@@ -73,25 +74,24 @@ files with one batch ID are duplicates and conflicting copies are quarantined.
    local journal for the next launch; an explicit final flush may close it early
    when permanently retiring a worker.
 3. Build `manifest.json` and `traces.tar.zst` atomically on local disk.
-4. Create or find the Drive batch folder by `batch_id`. Upload archive and
-   manifest with resumable sessions; retry 403, 429, and 5xx responses with
-   exponential backoff.
-5. Verify Drive-reported size/MD5 and locally recorded SHA-256. Create
-   `COMMITTED.json` last with Drive file IDs, hashes, counts, and creation time.
+4. Upload archive and manifest with resumable GCS sessions and
+   `if_generation_match=0`; retry transient failures with exponential backoff.
+5. Verify GCS-reported size and checksum against local files. Create
+   `COMMITTED.json` last with object names, generations, hashes, counts, and creation time.
 6. Keep local NPZ/archive files until the ingester uploads an acknowledgement.
    Retried batches retain their original IDs.
 
 An archive without `COMMITTED.json` is invisible and eligible for trash after
-24 hours. The protocol does not depend on Drive move or rename being atomic.
+24 hours. The protocol does not depend on object move or rename being atomic.
 Matching repeated markers are idempotent; conflicting markers are quarantined.
 
 ## Canonical ingestion and deduplication
 
-One logical ingester lists commit markers beneath the configured Drive root ID,
-groups them by `batch_id`, verifies file IDs, hashes, and manifest invariants,
+One logical ingester lists commit markers beneath the configured GCS prefix,
+groups them by `batch_id`, verifies object generations, hashes, and manifest invariants,
 and recomputes trace fingerprints. It accepts unseen fingerprints and records
 duplicates as provenance without creating a second canonical trace. Only after
-its database transaction commits does it upload the immutable acknowledgement.
+its database transaction commits does it upload the immutable acknowledgement object.
 
 Workers never open `game_trace/datahouse/catalog.sqlite`; that catalog describes
 token shards, not raw searches. Raw search metadata uses a separate ingester-owned
@@ -101,11 +101,11 @@ database. This keeps retries and schema migration out of the search hot path.
 
 Workers journal batch state as `open`, `uploaded`, `committed`, or
 `acknowledged`. Startup resumes the oldest incomplete batch before new search.
-Before joining production, a worker performs an authenticated Drive
-upload/download/delete canary and forces OAuth refresh. Sustained Drive failure
+Before joining production, a worker performs an authenticated GCS
+upload/download/delete canary. Sustained GCS failure
 pauses new search while durable local batches continue retrying.
 
-Metrics cover wins/hour, pending batches, upload age, retries, Drive API errors,
+Metrics cover wins/hour, pending batches, upload age, retries, GCS API errors,
 duplicate traces, bytes, and save-to-ack latency. Alerts fire when a committed
 batch lacks acknowledgement for 15 minutes or a worker misses twice its expected
 commit interval.
@@ -116,13 +116,13 @@ rebuilt from live output. Operational gates are: fewer than 0.5% wins lost in a
 1%; p95 commit-to-ack below 15 minutes at twice planned scale; and zero accepted
 checksum mismatches during fault injection.
 
-## Staged Google Drive scale-up
+## Staged GCS scale-up
 
 1. Archive 100 current NPZs and accept the default only if the size gate passes.
 2. Define fingerprint and JSON schemas with golden tests.
 3. Implement a local-filesystem adapter and fault every worker state transition.
-4. Implement Google Drive resumable upload, OAuth refresh, `appProperties`,
-   file-ID journals, checksum verification, and the authenticated canary.
+4. Implement GCS resumable upload, generation preconditions, object metadata,
+   generation journals, checksum verification, and the authenticated canary.
 5. Run two workers for 1,000 wins, interrupt one, and pass all integrity gates.
 6. Scale through 2, 4, 8, then the target worker count; stop at a failed gate.
 
@@ -136,4 +136,4 @@ so no policy-repository change is required.
 | Level 1 has a committed fixed prior | `src/agent/priors/level1.yaml`, `ActionSampler.for_level` |
 | token-shard catalog has a single transactional owner | `doc/0004-design-tokenized-datahouse.md` |
 | bootstrap keeps ROM and data outside Git | `deploy/README.md`, `deploy/setup_cloud_worker.sh` |
-| configured China worker reached Drive API and OAuth endpoints | remote canary, 2026-08-20; authenticated upload remains a gate |
+| GCS supports Application Default Credentials and generation preconditions | Google Cloud Storage client documentation; authenticated upload remains a gate |
