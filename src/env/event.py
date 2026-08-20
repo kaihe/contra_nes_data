@@ -24,9 +24,11 @@ from .constant import (
     ADDR_ENEMY_TYPE,
     ADDR_FALCON,
     ADDR_GUN_ANI,
+    ADDR_INDOOR_CLEARED,
     ADDR_INVINCIBILITY,
     ADDR_LEVEL,
     ADDR_LIVES,
+    ADDR_PLAYER_ADV,
     ADDR_PLAYER_DEATH,
     ADDR_PLAYER_STATE,
     ADDR_WEAPON,
@@ -43,6 +45,7 @@ from .utility import (
     routine,
     xscroll,
     yscroll,
+    yscroll_delta,
 )
 
 
@@ -52,7 +55,7 @@ class EventType(Enum):
     POWERUP = "power_up"
     WEAPON_CHANGE = "weapon_change"
     WEAPON_ITEM_GONE = "weapon_item_gone"
-    LANDMARK = 'reach_to_landmark'
+    MARCH = 'march_through_level'
     TERMINAL = 'episode_result'
     STAGE = 'in_which_game_stage'
 
@@ -210,29 +213,41 @@ class PowerUpEvent(BaseEvent):
 
 # ── Progress events ──────────────────────────────────────────────────────────
 #
-# Progress is tracked as landmarks: an event fires once, on the rising edge, as
-# the player crosses a target coordinate. Each family reads a different scalar
-# from RAM — horizontal scroll, vertical climb height, or screen/room index —
-# and concrete instances are made from specific landmark values.
+# How far the player advanced *this step*, in the unit the level advances in.
+# Contra levels march in one of three styles (``env.utility.advance_style``):
+#
+#   "forward" — side-scroll levels: horizontal scroll pixels
+#   "up"      — the waterfall climb: vertical scroll pixels
+#   "inside"  — indoor bases, which barely scroll: the player instead breaks the
+#               wall core, walks through the opened door, and enters the next
+#               room, so progress is those three milestones rather than pixels
+#
+# Unlike the other families these fire on most steps and carry a magnitude, so
+# they are a dense advancement signal (what a search or RL reward integrates)
+# rather than a narrative event — which is why they stay out of
+# ``get_event_instances`` / ``all_events``; ask for them via ``make_march_events``.
 
-class LandmarkEvent(BaseEvent):
-    """Fires once when a scalar RAM position crosses ``target`` upward.
+class MarchEvent(BaseEvent):
+    """Advancement toward the end of the level, as a per-step magnitude.
 
-    Subclasses supply the position reader (``_position``) and the tag prefix.
+    ``style`` is the advancement style the instance measures ("forward",
+    "inside", "up"); a caller keeps the instances matching the level it is on.
+    The magnitude is that style's own unit — scroll pixels for "forward"/"up",
+    a 0-or-1 milestone for each "inside" event — so weights are per style, not
+    comparable across them.
+
+    Like :class:`TerminalEvent`, the condition is a callable, so each instance is
+    one line in :func:`make_march_events`.
     """
 
-    prefix = "reach"
-
-    def __init__(self, target: int):
-        self.target = target
-        self.tag = f"{self.prefix}_{target}"
-        self.type = EventType.LANDMARK
-
-    def _position(self, ram: np.ndarray) -> int:
-        raise NotImplementedError
+    def __init__(self, tag: str, style: str, trigger_fn):
+        self.tag = tag
+        self.style = style
+        self._trigger_fn = trigger_fn
+        self.type = EventType.MARCH
 
     def trigger(self, pre: np.ndarray, cur: np.ndarray) -> float:
-        return 1.0 if self._position(pre) < self.target <= self._position(cur) else 0.0
+        return float(self._trigger_fn(pre, cur))
 
 
 # ── Player / level-flow events ───────────────────────────────────────────────
@@ -275,8 +290,9 @@ class GameStageEvent(BaseEvent):
 # ── Instance factories ───────────────────────────────────────────────────────
 #
 # One factory per event type builds that type's concrete instances.
-# ``get_event_instances`` groups them by EventType value. Landmark events are
-# intentionally excluded for now (they need per-level landmark tables).
+# ``get_event_instances`` groups them by EventType value. March events are
+# intentionally excluded: they fire on nearly every step, so they belong to a
+# reward that integrates them, not to a narrative scan (see ``make_march_events``).
 
 # Common enemy types that aren't real kill targets (items / projectiles /
 # armored plating). Armored/ting-reset types are covered by damage, not kills.
@@ -345,6 +361,33 @@ def make_powerup_events() -> list[PowerUpEvent]:
     ]
 
 
+def make_march_events(style: str | None = None) -> list[MarchEvent]:
+    """Per-step advancement events, optionally filtered to one level's style.
+
+    ``push_right`` is the raw signed scroll delta, not clamped at 0: scrolling
+    back is real lost ground, and the end-of-level xscroll reset shows up as one
+    large negative step (which is why a searcher stops at the transition rather
+    than stepping through it).
+
+    Indoors, ``push_inside`` fires on every step the player is walking through
+    the opened door (~44 steps), bridging the long gap between breaking the core
+    and reaching the next room; the two milestones bracket it.
+    """
+    events = [
+        MarchEvent("push_right", "forward",
+                   lambda pre, cur: xscroll(cur) - xscroll(pre)),
+        MarchEvent("push_up", "up", yscroll_delta),
+        MarchEvent("core_broken", "inside",
+                   lambda pre, cur: 1.0 if (int(pre[ADDR_INDOOR_CLEARED]) == 0
+                                            and int(cur[ADDR_INDOOR_CLEARED]) != 0) else 0.0),
+        MarchEvent("push_inside", "inside",
+                   lambda _, cur: 1.0 if int(cur[ADDR_PLAYER_ADV]) != 0 else 0.0),
+        MarchEvent("room_enter", "inside",
+                   lambda pre, cur: 1.0 if int(cur[ADDR_XSCROLL_HI]) > int(pre[ADDR_XSCROLL_HI]) else 0.0),
+    ]
+    return [ev for ev in events if style is None or ev.style == style]
+
+
 def make_terminal_events() -> list[TerminalEvent]:
     """Episode-ending events (death, level clear, game clear)."""
     return [
@@ -375,7 +418,7 @@ def make_stage_events() -> list[GameStageEvent]:
 
 
 def get_event_instances(level: int | None = None) -> dict[str, list[BaseEvent]]:
-    """All event instances grouped by EventType value (landmark excluded).
+    """All event instances grouped by EventType value (march excluded).
 
     ``level`` scopes the kill events to that level's enemies plus the common
     ones; None includes every level's enemies.
@@ -391,5 +434,17 @@ def get_event_instances(level: int | None = None) -> dict[str, list[BaseEvent]]:
 
 
 def all_events(level: int | None = None) -> list[BaseEvent]:
-    """Flat list of every event instance (landmark excluded)."""
+    """Flat list of every event instance (march excluded)."""
     return [ev for group in get_event_instances(level).values() for ev in group]
+
+
+def event_by_tag(tag: str, level: int | None = None) -> BaseEvent:
+    """The single event instance carrying ``tag`` (e.g. "die", "pick_spread").
+
+    Instances are built per call, so resolve the events you need once at import
+    time rather than inside a per-step loop.
+    """
+    for ev in all_events(level):
+        if ev.tag == tag:
+            return ev
+    raise KeyError(f"no event with tag {tag!r}")

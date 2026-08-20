@@ -1,0 +1,56 @@
+level: 1
+seed: 20260803
+selection: median-length train source per weapon; full fight only
+states:
+- name: full_flamethrower
+  file: full_flamethrower.state
+  stage: full
+  source_task: win_level1_20260630220600_i173
+  src_trace: win_level1_20260630220600_i173.npz
+  split: train
+  source_offset: 0
+  offset_frac: 0.0
+  weapon: Flamethrower
+  rapid: true
+  boss_hp_start: 64
+  skip: 3
+  state_sha256: b0217a90a03b50594203fb181d407143207e2683283a1d50eba1908b50a246c6
+- name: full_laser
+  file: full_laser.state
+  stage: full
+  source_task: win_level1_20260630171218_i8
+  src_trace: win_level1_20260630171218_i8.npz
+  split: train
+  source_offset: 0
+  offset_frac: 0.0
+  weapon: Laser
+  rapid: false
+  boss_hp_start: 62
+  skip: 3
+  state_sha256: dfaa26ea8365b11293396653752a8f301268c7b0ccc9220ea1dc2442c8ae8249
+- name: full_regular
+  file: full_regular.state
+  stage: full
+  source_task: win_level1_20260701000749_i274
+  src_trace: win_level1_20260701000749_i274.npz
+  split: train
+  source_offset: 0
+  offset_frac: 0.0
+  weapon: Regular
+  rapid: true
+  boss_hp_start: 63
+  skip: 3
+  state_sha256: 2017a1b250a97364754bdc6a468e148e027b77d4a016a8d9cc39f380f6bdc508
+- name: full_spread
+  file: full_spread.state
+  stage: full
+  source_task: win_level1_20260701015306_i371
+  src_trace: win_level1_20260701015306_i371.npz
+  split: train
+  source_offset: 0
+  offset_frac: 0.0
+  weapon: Spread
+  rapid: true
+  boss_hp_start: 62
+  skip: 3
+  state_sha256: f1037f5136c5d92c6cd9dbf51790842dbab79549e8245186cacd77a2f68a41c8

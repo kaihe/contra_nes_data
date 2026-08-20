@@ -11,8 +11,10 @@ forward chain:
 4. each **consecutive anchor pair** defines one task: start on ground A, drive to
    ground B (crossing whatever water / gaps lie between).
 
-Tasks are deterministic slices replayed from a captured save-state, so no separate
-verification pass is needed.
+Tasks are deterministic slices replayed from a captured save-state, but each one is
+still replayed against :meth:`TraverseMaker.goal_reached` — the anchor is a *place*
+(world-x **and** elevation, on ground), not just a column, so the slice reaching it
+has to be checked rather than assumed.
 
 CLI
 ---
@@ -37,6 +39,11 @@ from env.utility import boss_scene
 
 START_MAX = 100           # random start is an action index in [0, START_MAX]
 MIN_GAP = 100             # minimum action-index gap between consecutive anchors
+# Vertical slack on the end anchor. End anchors sit at 7 distinct screen heights
+# (68, 100, 132, 148, 164, 196, 212) and the closest pair is 16px apart, so the
+# tolerance must stay <= 8 to keep those heights distinguishable: at 16 a task
+# anchored on a ledge would again be satisfied by the ground below it.
+Y_TOL = 8
 _LEVEL_RE = re.compile(r"(level\d+)")
 _TRACE_ID_RE = re.compile(r"level\d+_(\d+)")   # the unique timestamp in the trace name
 
@@ -129,10 +136,11 @@ class TraverseMaker(TaskMaker):
     default_traces = "game_trace/mc_trace/level1/win_level1_*.npz"
 
     def __init__(self, *, min_gap: int = MIN_GAP, start_max: int = START_MAX,
-                 seed: int = 0):
+                 seed: int = 0, verify: bool = True):
         self.min_gap = min_gap
         self.start_max = start_max
         self.seed = seed
+        self.verify = verify
         self.rng = np.random.default_rng(seed)
 
     def extract(self, trace_path: str) -> list[Segment]:
@@ -141,8 +149,23 @@ class TraverseMaker(TaskMaker):
 
     def goal_reached(self, seg: Segment, pre, cur) -> bool:
         """Goal predicate (state, not event): the player has reached the target
-        world-x and is back on solid ground."""
-        return player_x(cur) >= seg.meta["end_x"] and terrain_state(cur) == "ground"
+        world-x **at the target elevation** and is back on solid ground.
+
+        The height clause is what makes the anchor a *place* rather than a column:
+        without it, running along the floor underneath a ledge anchor completes the
+        task. ``>=`` on x is deliberate — each task's end anchor is the next task's
+        start, so overshooting the chain must stay a success.
+        """
+        return (player_x(cur) >= seg.meta["end_x"]
+                and abs(int(cur[ADDR_PLAYER_Y]) - seg.meta["end_y"]) <= Y_TOL
+                and terrain_state(cur) == "ground")
+
+    def reject(self, seg: Segment, kept) -> str | None:
+        # The slice is deterministic, but the goal predicate is not implied by the
+        # slice: replay it and require the anchor (x, y, footing) to actually be hit.
+        if self.verify and not self.verify_segment(seg):
+            return "dropped"
+        return None
 
     def add_arguments(self, p) -> None:
         p.add_argument("--min-gap", type=int, default=self.min_gap,
@@ -151,11 +174,14 @@ class TraverseMaker(TaskMaker):
                        help="random start is an action index in [0, START_MAX]")
         p.add_argument("--seed", type=int, default=self.seed,
                        help="RNG seed for the random starts")
+        p.add_argument("--no-verify", action="store_true",
+                       help="keep segments without replaying them against the goal predicate")
         p.add_argument("--inspect", metavar="TRACE", default=None,
                        help="print the anchor chain for one trace and render an overlay")
 
     def configure(self, args) -> None:
         self.min_gap, self.start_max, self.seed = args.min_gap, args.start_max, args.seed
+        self.verify = not args.no_verify
         self.rng = np.random.default_rng(self.seed)
 
     def before_run(self, args) -> bool:

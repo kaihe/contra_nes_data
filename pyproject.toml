@@ -17,6 +17,6 @@ package-dir = { "" = "src" }
 [tool.setuptools.packages.find]
 where = ["src"]
 
-# Ship the YAML action configs that action.py loads at import time.
+# Ship action configs plus the reproducible spread-gun and boss start-state banks.
 [tool.setuptools.package-data]
-agent = ["*.yaml"]
+agent = ["*.yaml", "priors/*.yaml", "states/*/*.state", "states/*/*.yaml"]
