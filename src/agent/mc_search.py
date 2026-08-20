@@ -44,7 +44,7 @@ import yaml
 
 from agent.reward import compute_reward
 from agent.sampler import ActionSampler
-from env.constant import ADDR_LEVEL, ADDR_LEVEL_ROUTINE
+from env.constant import ADDR_LEVEL, ADDR_LEVEL_ROUTINE, ADDR_WEAPON, WEAPON_NAMES
 from env.event import event_by_tag
 from env.utility import boss_scene
 from util.replay import GAME, INTTYPE, SKIP as REPLAY_SKIP, rewind_state, scan_events, step_env
@@ -160,6 +160,9 @@ class SearchEffort:
     search_wall_s: float = 0.0
     search_steps: int = 0
     final_reward: float = 0.0
+    boss_weapon: str = ""
+    boss_rapid: bool = False
+    boss_entry_step: int = -1
 
 
 class _Search:
@@ -185,6 +188,16 @@ class _Search:
         self.events: list = []      # pending event tags for the next log line
         self.sampled = 0            # total actions sampled across all rollouts
         self.t0 = time.time()
+        self.boss_weapon = ""
+        self.boss_rapid = False
+        self.boss_entry_step = -1
+
+        # Boss-only searches may begin inside the boss scene and never cross its
+        # edge. Record their initial loadout as step zero as well.
+        rewind_state(self.env, self.initial)
+        initial_ram = self.env.unwrapped.get_ram()
+        if boss_scene(initial_ram):
+            self._record_boss_loadout(initial_ram, 0)
 
     # -- public entry --------------------------------------------------------------
 
@@ -207,8 +220,15 @@ class _Search:
             else:
                 self._commit(best_seq, death_rate, elapsed)
 
-        effort = SearchEffort(self.sampled, time.time() - self.t0,
-                              len(self.actions), self._reward)
+        effort = SearchEffort(
+            sampled_actions=self.sampled,
+            search_wall_s=time.time() - self.t0,
+            search_steps=len(self.actions),
+            final_reward=self._reward,
+            boss_weapon=self.boss_weapon,
+            boss_rapid=self.boss_rapid,
+            boss_entry_step=self.boss_entry_step,
+        )
         return self.actions, self.state, self.rewards, effort
 
     # -- phases --------------------------------------------------------------------
@@ -272,6 +292,13 @@ class _Search:
         del self.actions[rewind_to:]
         del self.states[rewind_to:]
         del self.rewards[rewind_to:]
+        if self.boss_entry_step >= rewind_to:
+            self.boss_weapon = ""
+            self.boss_rapid = False
+            self.boss_entry_step = -1
+            ram = self.env.unwrapped.get_ram()
+            if boss_scene(ram):
+                self._record_boss_loadout(ram, rewind_to)
 
     def _commit(self, best_seq: list, death_rate: float, elapsed: float) -> None:
         """Replay and commit a prefix of the best rollout, stopping the prefix
@@ -291,6 +318,9 @@ class _Search:
             cur = self.env.unwrapped.get_ram()
             if EV_PLAYER_DIE.trigger(pre, cur):
                 raise RuntimeError(f"Death during commit at step {len(self.actions)}")
+
+            if self.boss_entry_step < 0 and boss_scene(cur) and not boss_scene(pre):
+                self._record_boss_loadout(cur, len(self.actions))
 
             self.state.emu_state = self.env.em.get_state()
             new_level = get_level(cur)
@@ -331,6 +361,13 @@ class _Search:
         self.actions.append(action)
         self.states.append(emu_state)
         self.rewards.append(reward)
+
+    def _record_boss_loadout(self, ram, step: int) -> None:
+        raw = int(ram[ADDR_WEAPON])
+        gun = raw & 0x0F
+        self.boss_weapon = WEAPON_NAMES.get(gun, f"Unknown{gun}")
+        self.boss_rapid = bool(raw & 0x10)
+        self.boss_entry_step = step
 
     def _collect_events(self, pre, cur) -> None:
         if not self.verbose:
@@ -397,6 +434,9 @@ def save_trace(initial_state_for_npz: bytes, actions: list, trace_path: str,
         search_steps=np.array(effort.search_steps, dtype=np.int64),
         trace_steps=np.array(len(actions), dtype=np.int64),
         final_reward=np.array(effort.final_reward, dtype=np.float32),
+        boss_weapon=np.array(effort.boss_weapon),
+        boss_rapid=np.array(effort.boss_rapid, dtype=np.bool_),
+        boss_entry_step=np.array(effort.boss_entry_step, dtype=np.int64),
         rollouts=_i32(rollouts), rollout_len=_i32(rollout_len),
         max_time=_i32(max_time), max_rewind=_i32(max_rewind), max_actions=_i32(max_actions),
         goal=np.array("" if goal is None else goal),

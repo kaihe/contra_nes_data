@@ -63,6 +63,9 @@ def test_search_can_start_from_supplied_savestate(tmp_path, monkeypatch):
         assert bytes(d["initial_state"]) == b"boss-state"
         assert str(d["src_trace"]) == "root.npz"
         assert str(d["prior_sha256"]) == ActionSampler.for_level(1).prior_sha256
+        assert str(d["boss_weapon"]) == ""
+        assert not bool(d["boss_rapid"])
+        assert int(d["boss_entry_step"]) == -1
 
 
 def test_load_initial_state_checks_manifest_and_returns_lineage(tmp_path):
@@ -123,3 +126,15 @@ def test_boss_entry_goal_fires_only_on_scene_edge(monkeypatch):
     assert search._reached_goal(np.array([0]), np.array([1]), 1)
     assert not search._reached_goal(np.array([1]), np.array([1]), 1)
     assert not search._reached_goal(np.array([0]), np.array([0]), 1)
+
+
+def test_boss_loadout_records_weapon_and_rapid_fire():
+    search = object.__new__(mc_search._Search)
+    ram = np.zeros(mc_search.ADDR_WEAPON + 1, dtype=np.uint8)
+    ram[mc_search.ADDR_WEAPON] = 0x13
+
+    search._record_boss_loadout(ram, 417)
+
+    assert search.boss_weapon == "Spread"
+    assert search.boss_rapid is True
+    assert search.boss_entry_step == 417
