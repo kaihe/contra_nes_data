@@ -530,7 +530,7 @@ def generate_traces(level, n, *, rollouts=64, rollout_len=48, max_time=600,
                     max_rewind=30, max_actions=6000, goal="level_up",
                     workers=None, settle_margin=16, max_attempts=None,
                     initial_emu_state=None, trace_metadata=None,
-                    trace_dir=None, trace_stem=None):
+                    trace_dir=None, trace_stem=None, machine_mode=False):
     """Loop the search in one process until `n` winning traces are collected.
 
     Each search opens/closes its own env+pool (one emulator per process) and
@@ -547,9 +547,13 @@ def generate_traces(level, n, *, rollouts=64, rollout_len=48, max_time=600,
         t0 = time.time()
         trace_path = None
         if trace_dir is not None:
-            date_str = time.strftime("%Y%m%d%H%M%S")
-            trace_path = os.path.join(
-                trace_dir, f"{trace_stem or 'win'}_{date_str}_i{attempts}.npz")
+            if machine_mode:
+                date_str = time.strftime("%y%m%d_%H%M%S")
+                trace_path = os.path.join(
+                    trace_dir, f"{trace_stem}{date_str}_i{attempts}.npz")
+            else:
+                stem = trace_stem or ("win_" + time.strftime("%Y%m%d%H%M%S"))
+                trace_path = os.path.join(trace_dir, f"{stem}_i{attempts}.npz")
         path = _run_one_search(
             level=level, rollouts=rollouts, rollout_len=rollout_len,
             max_time=max_time, max_rewind=max_rewind, max_actions=max_actions,
@@ -596,6 +600,9 @@ def _parse_args():
     p.add_argument("--initial-state", type=str,
                    help="gzip savestate to use as every run's starting point; adjacent "
                         "manifest.yaml metadata is copied into each trace")
+    p.add_argument("--machine", type=str,
+                   help="Machine tag for trace filenames. When set, traces are saved as "
+                        "<machine>_l1<yymmdd>_i<N>.npz under game_trace/mc_trace/level<N>/")
     p.add_argument("--no-verbose", action="store_true", help="Suppress per-step search output")
     return p.parse_args()
 
@@ -643,14 +650,24 @@ def main():
         initial_state, trace_metadata = load_initial_state(args.initial_state)
         trace_dir = os.path.join(TRACE_DIR, "boss_level1")
         state_name = os.path.splitext(os.path.basename(args.initial_state))[0]
-        trace_stem = "win_boss_level1_" + re.sub(r"[^a-zA-Z0-9_-]+", "_", state_name)
+        base_stem = "win_boss_level1_" + re.sub(r"[^a-zA-Z0-9_-]+", "_", state_name)
+        trace_stem = base_stem + "_" + time.strftime('%Y%m%d%H%M%S')
         if verbose:
             print(f"  Initial State:  {args.initial_state}")
+    elif args.machine:
+        trace_dir = os.path.join(TRACE_DIR, f"level{args.level}")
+        trace_stem = f"{args.machine}_l1_"
+        if verbose:
+            print(f"  Machine Tag:    {args.machine}")
     if args.runs <= 1:
         trace_path = None
         if trace_dir is not None:
-            trace_path = os.path.join(
-                trace_dir, f"{trace_stem}_{time.strftime('%Y%m%d%H%M%S')}_i0.npz")
+            if args.machine:
+                date_str = time.strftime("%y%m%d_%H%M%S")
+                trace_path = os.path.join(trace_dir, f"{trace_stem}{date_str}_i0.npz")
+            else:
+                stem = trace_stem or ("win_" + time.strftime("%Y%m%d%H%M%S"))
+                trace_path = os.path.join(trace_dir, f"{stem}_i0.npz")
         _run_one_search(
             level=args.level, verbose=verbose, initial_emu_state=initial_state,
             trace_path=trace_path, trace_metadata=trace_metadata, **common)
@@ -659,7 +676,7 @@ def main():
         generate_traces(
             args.level, args.runs, initial_emu_state=initial_state,
             trace_metadata=trace_metadata, trace_dir=trace_dir,
-            trace_stem=trace_stem, **common)
+            trace_stem=trace_stem, machine_mode=bool(args.machine), **common)
 
 
 if __name__ == "__main__":
