@@ -48,7 +48,8 @@ validate_selection() {
 }
 
 run_import() {
-  local weapon="$1" spool="${spool_root}/${weapon}"
+  local weapon="$1"
+  local spool="${spool_root}/${weapon}"
   mkdir -p "${spool}"
   "${python_bin}" -u -m worker.legacy_import \
     --gcs-root "${gcs_root}" \
