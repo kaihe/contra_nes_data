@@ -33,7 +33,7 @@ fi
 
 "${apt[@]}" update
 DEBIAN_FRONTEND=noninteractive "${apt[@]}" install -y \
-    build-essential git python3-dev python3-pip python3-venv
+    build-essential git python3-dev python3-pip python3-venv rclone zstd
 
 if [[ -d "${project_dir}/.git" ]]; then
     git -C "${project_dir}" pull --ff-only

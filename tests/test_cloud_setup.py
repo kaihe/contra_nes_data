@@ -15,6 +15,7 @@ def test_cloud_setup_is_valid_bash_and_keeps_rom_external():
     assert "stable_retro.import" in source
     assert "git -C \"${project_dir}\" pull --ff-only" in source
     assert '[[ "${EUID}" -eq 0 ]]' in source
+    assert "rclone zstd" in source
     assert "rm -rf" not in source
     assert ".bashrc" not in source
 

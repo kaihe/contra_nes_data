@@ -9,7 +9,7 @@ Log in to the worker and clone the branch containing the deployment tooling:
 
 ```bash
 mkdir -p /root/code
-git clone --branch feat/cloud-trace-worker \
+git clone --branch feat/cloud-worker-loop \
   https://gitee.com/kaihe_2020/contra_nes_data.git \
   /root/code/contra_nes_data
 cd /root/code/contra_nes_data
@@ -65,37 +65,54 @@ bash deploy/setup_cloud_worker.sh
 Success ends with `Cloud worker ready: Contra-Nes`. Re-running the script updates
 the checkout with `git pull --ff-only` and reuses `.venv`.
 
-## 4. Start Level 1 generation
+## 4. Connect Google Drive
+
+The bootstrap installs `rclone`. Configure a Drive remote named `gdrive` and
+complete its OAuth flow before starting production:
+
+```bash
+rclone config
+rclone lsd "gdrive:"
+```
+
+The rclone configuration contains credentials. Keep it outside the repository
+and restrict its permissions to the worker account.
+
+## 5. Start the persistent Level 1 worker
 
 The current fast full-level configuration is:
 
 ```bash
 cd /root/code/contra_nes_data
 source .venv/bin/activate
-mkdir -p game_trace/mc_trace/level1
-python -u -m agent.mc_search \
-  --level 1 --runs 40000 \
+mkdir -p game_trace/worker_spool
+python -u -m worker.search_loop \
+  --drive-remote "gdrive:Contra MC Tracehouse/schema-v1/level1/full" \
+  --spool-dir game_trace/worker_spool \
+  --level 1 \
   --rollouts 16 --rollout-len 24 --settle-margin 8 \
   --max-rewind 15 --workers "$(nproc)" \
   --max-time 600 --max-actions 6000 \
-  --goal level_up --no-verbose \
-  2>&1 | tee game_trace/mc_trace/level1/search.log
+  --goal level_up \
+  2>&1 | tee game_trace/worker_spool/search.log
 ```
 
-Run it inside `tmux` or a systemd service if it must survive SSH disconnects.
-Outputs appear in `game_trace/mc_trace/level1/` and are ignored by Git.
+Run it inside `tmux` or a systemd service. Every win is saved locally at once.
+At 100 wins the worker seals and uploads the batch while search continues into
+the next one. Restarting the same command resumes its open and sealed batches.
 
-## 5. Operate and retrieve
+## 6. Stop, inspect, and retire
 
 ```bash
-# Count winning traces on the worker
-find game_trace/mc_trace/level1 -maxdepth 1 -name '*.npz' | wc -l
+# Count locally spooled traces
+find game_trace/worker_spool -path '*/traces/*.npz' | wc -l
 
-# Copy results back from the workstation
-rsync -av --partial -e "ssh -p $CLOUD_SSH_PORT" \
-  "$CLOUD_SSH_USER@$CLOUD_SSH_HOST:/root/code/contra_nes_data/game_trace/mc_trace/level1/" \
-  game_trace/mc_trace/level1/
+# Permanently retire this worker and upload its final partial batch
+python -m worker.search_loop \
+  --drive-remote "gdrive:Contra MC Tracehouse/schema-v1/level1/full" \
+  --spool-dir game_trace/worker_spool --flush
 ```
 
-Use `Ctrl-C` for a clean stop. Before terminating a cloud instance, copy all
-trace files back and verify the local count.
+`Ctrl-C` stops after the active search returns and leaves a partial batch open
+for the next launch. Use `--flush` only before permanently deleting the worker.
+Do not delete the spool until the corresponding Drive acknowledgement exists.
