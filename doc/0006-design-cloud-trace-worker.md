@@ -1,6 +1,6 @@
 # Cloud trace worker bootstrap
 
-Status: Proposed
+Status: Implemented
 
 ## Decision
 
