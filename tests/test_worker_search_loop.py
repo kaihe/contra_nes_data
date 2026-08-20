@@ -6,6 +6,7 @@ import base64
 import numpy as np
 
 from agent.mc_search import SearchEffort, save_trace
+from worker.legacy_import import LegacyTraceImporter, recover_boss_loadout
 from worker.search_loop import GCSUploader, WorkerLoop
 
 
@@ -126,3 +127,88 @@ def test_gcs_uploader_verifies_payloads_and_commits_last(tmp_path):
     marker = json.loads((batch / "COMMITTED.json").read_text())
     assert marker["trace_count"] == 2
     assert set(marker["object_generations"]) == {"traces.tar.zst", "manifest.json"}
+
+
+def test_legacy_import_preserves_npz_and_enriches_manifest(tmp_path):
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    for index in range(2):
+        action = np.zeros(9, dtype=np.uint8)
+        action[index] = 1
+        save_trace(b"state", [action],
+                   str(source_dir / f"legacy-{index}.npz"))
+    before = {path.name: path.read_bytes() for path in source_dir.glob("*.npz")}
+    spool = tmp_path / "spool"
+    importer = LegacyTraceImporter(
+        [str(source_dir / "*.npz")], spool,
+        enrich=lambda _: {"boss_weapon": "Laser", "boss_rapid": True,
+                          "boss_entry_step": 42, "boss_metadata_source": "test"},
+    )
+    uploader = RecordingUploader()
+    loop = WorkerLoop(spool, uploader, importer, worker_id="legacy", batch_size=2)
+    try:
+        assert loop.run() == 2
+        loop.upload_queue.join()
+    finally:
+        importer.close()
+        loop.close()
+
+    assert {path.name: path.read_bytes() for path in source_dir.glob("*.npz")} == before
+    manifest = json.loads((uploader.uploads[0][0] / "manifest.json").read_text())
+    assert manifest["traces"][0]["boss_weapon"] == "Laser"
+    assert manifest["traces"][0]["boss_rapid"] is True
+    assert manifest["traces"][0]["legacy_source_sha256"]
+
+    resumed = LegacyTraceImporter([str(source_dir / "*.npz")], spool, enrich=lambda _: {})
+    resumed_loop = WorkerLoop(spool, RecordingUploader(), resumed,
+                              worker_id="legacy", batch_size=2)
+    try:
+        assert resumed_loop.run() == 0
+    finally:
+        resumed.close()
+        resumed_loop.close()
+
+
+def test_legacy_replay_recovers_spread_rapid_at_boss_edge(tmp_path, monkeypatch):
+    trace = tmp_path / "legacy.npz"
+    np.savez_compressed(trace, initial_state=np.frombuffer(b"state", dtype=np.uint8),
+                        actions=np.zeros((1, 9), dtype=np.uint8), skip=np.array(1))
+
+    class FakeEnv:
+        def __init__(self):
+            self.unwrapped = self
+            self.ram = np.zeros(0xAB, dtype=np.uint8)
+
+        def get_ram(self):
+            return self.ram
+
+    env = FakeEnv()
+    monkeypatch.setattr("worker.legacy_import.rewind_state", lambda *_: None)
+    monkeypatch.setattr("worker.legacy_import.boss_scene", lambda ram: bool(ram[0]))
+
+    def step(*_):
+        env.ram[0] = 1
+        env.ram[0xAA] = 0x13
+
+    monkeypatch.setattr("worker.legacy_import.step_env", step)
+
+    metadata = recover_boss_loadout(trace, env)
+
+    assert metadata == {
+        "boss_weapon": "Spread", "boss_rapid": True,
+        "boss_entry_step": 0, "boss_metadata_source": "replay",
+    }
+
+
+def test_legacy_boss_trace_maps_existing_loadout_without_replay(tmp_path):
+    trace = tmp_path / "boss.npz"
+    np.savez_compressed(
+        trace, initial_state=np.frombuffer(b"state", dtype=np.uint8),
+        actions=np.zeros((1, 9), dtype=np.uint8), weapon=np.array("Laser"),
+        rapid=np.array(True),
+    )
+
+    assert recover_boss_loadout(trace, env=None) == {
+        "boss_weapon": "Laser", "boss_rapid": True,
+        "boss_entry_step": 0, "boss_metadata_source": "legacy_trace",
+    }

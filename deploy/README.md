@@ -120,3 +120,24 @@ python -m worker.search_loop \
 `Ctrl-C` stops after the active search returns and leaves a partial batch open
 for the next launch. Use `--flush` only before permanently deleting the worker.
 Do not delete the spool until the corresponding GCS acknowledgement exists.
+
+## 7. Import existing traces
+
+Legacy NPZs use the same 100-trace protocol through a finite pseudo-search loop.
+Quote the glob so Python—not the shell—expands it. Missing boss loadout metadata
+is recovered by replay; source NPZs remain byte-identical and are hard-linked
+into the spool when both paths are on the same filesystem.
+
+```bash
+python -u -m worker.legacy_import \
+  --gcs-root "gs://BUCKET/contra-mc-tracehouse/schema-v1/level1/full" \
+  --spool-dir game_trace/legacy_upload_spool/level1-full \
+  --worker-id local-legacy-level1-full \
+  --trace-glob 'game_trace/mc_trace/level1/*.npz'
+```
+
+Use a separate spool and matching GCS prefix for each homogeneous collection,
+for example `level1/boss` and `level2/full`. Restarting the same command skips
+journaled traces, resumes uploads, and finishes the existing open batch. Once
+all sources are consumed, the importer explicitly uploads the final partial
+batch.

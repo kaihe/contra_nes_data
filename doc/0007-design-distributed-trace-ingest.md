@@ -67,7 +67,8 @@ The worker also accepts existing NPZ globs as a finite pseudo-search source. It
 hard-links each source into the durable spool when possible (copying only across
 filesystems), records its SHA-256 in a restart journal, and never edits or deletes
 the source file. Legacy traces missing boss loadout fields are replayed once with
-one persistent emulator; recovered `boss_weapon`, `boss_rapid`, and
+one persistent emulator, except boss-start traces whose equivalent legacy
+`weapon` and `rapid` fields can be mapped directly; recovered `boss_weapon`, `boss_rapid`, and
 `boss_entry_step` are written into the batch manifest while the archived NPZ
 remains byte-identical. Import closes normal 100-trace batches and explicitly
 flushes its final partial batch.

@@ -66,7 +66,7 @@ def _scalar(data, key, default=None):
     return value.item() if value.ndim == 0 else value.tolist()
 
 
-def trace_record(path: Path) -> dict:
+def trace_record(path: Path, overrides: dict | None = None) -> dict:
     """Return manifest metadata and the content identity for one trace."""
     with np.load(path, allow_pickle=False) as data:
         identity = hashlib.sha256()
@@ -92,7 +92,12 @@ def trace_record(path: Path) -> dict:
             value = _scalar(data, key)
             if value is not None:
                 record[key] = value
+    record.update(overrides or {})
     return record
+
+
+class SourceExhausted(Exception):
+    """A finite pseudo-search source has no more traces."""
 
 
 class GCSUploader:
@@ -206,10 +211,12 @@ class WorkerLoop:
 
     @staticmethod
     def _trace_count(batch: Path) -> int:
-        return sum(1 for _ in (batch / "traces").glob("*.npz"))
+        return sum(1 for path in (batch / "traces").glob("*.npz")
+                   if not path.name.endswith(".partial.npz"))
 
     def _seal(self, batch: Path) -> Path:
-        traces = sorted((batch / "traces").glob("*.npz"))
+        traces = sorted(path for path in (batch / "traces").glob("*.npz")
+                        if not path.name.endswith(".partial.npz"))
         if not traces:
             raise ValueError("cannot seal an empty batch")
         manifest = {
@@ -218,7 +225,8 @@ class WorkerLoop:
             "batch_id": batch.name,
             "trace_count": len(traces),
             "created_at": time.time(),
-            "traces": [trace_record(path) for path in traces],
+            "traces": [trace_record(path, self._trace_overrides(batch, path))
+                       for path in traces],
         }
         _atomic_json(batch / "manifest.json", manifest)
 
@@ -239,6 +247,11 @@ class WorkerLoop:
         destination = self.sealed_root / batch.name
         os.replace(batch, destination)
         return destination
+
+    @staticmethod
+    def _trace_overrides(batch: Path, trace: Path) -> dict:
+        sidecar = batch / "metadata" / f"{trace.name}.json"
+        return json.loads(sidecar.read_text()) if sidecar.exists() else {}
 
     def _upload_forever(self) -> None:
         while True:
@@ -286,12 +299,18 @@ class WorkerLoop:
         while not self.stop.is_set() and (max_wins is None or wins < max_wins):
             batch = self._open_batch()
             temporary = batch / "traces" / f"{uuid.uuid4().hex}.partial.npz"
-            result = self.search_one(temporary)
+            try:
+                result = self.search_one(temporary)
+            except SourceExhausted:
+                break
             if result is None:
                 temporary.unlink(missing_ok=True)
                 continue
             final = temporary.with_name(temporary.name.replace(".partial", ""))
             os.replace(temporary, final)
+            saved = getattr(self.search_one, "saved", None)
+            if saved is not None:
+                saved(final)
             wins += 1
             count = self._trace_count(batch)
             print(f"win {wins}: batch={batch.name} traces={count}/{self.batch_size}", flush=True)
