@@ -92,13 +92,15 @@ class LegacyTraceImporter:
     """Finite search-compatible source with replay enrichment and restart journal."""
 
     def __init__(self, patterns: list[str], spool_dir: Path, *, source_paths=(),
-                 enrich=None, static_metadata: dict | None = None):
+                 excluded_paths=(), enrich=None,
+                 static_metadata: dict | None = None):
         self.spool_dir = Path(spool_dir)
         self.journal = self.spool_dir / "legacy_import.jsonl"
         self.imported = self._load_imported()
         sources = {Path(item).resolve() for pattern in patterns
                    for item in glob.iglob(pattern, recursive=True)}
         sources.update(Path(item).resolve() for item in source_paths)
+        sources.difference_update(Path(item).resolve() for item in excluded_paths)
         self.sources = iter(sorted(path for path in sources if path.is_file()))
         self.enrich = enrich
         self.static_metadata = dict(static_metadata or {})
@@ -177,10 +179,14 @@ def _parse_args():
                         help="quoted NPZ glob; may be repeated")
     parser.add_argument("--trace-list", action="append", default=[],
                         help="UTF-8 file containing one source NPZ path per line")
+    parser.add_argument("--exclude-list", action="append", default=[],
+                        help="UTF-8 source list to subtract from globs/lists")
     parser.add_argument("--batch-size", type=int, default=100,
                         help="traces per archive (default: 100)")
     parser.add_argument("--trace-scope", choices=("full_level", "boss_fight"),
                         help="explicit collection class stored in each manifest row")
+    parser.add_argument("--collection-id",
+                        help="stable logical collection stored in each manifest row")
     return parser.parse_args()
 
 
@@ -190,15 +196,23 @@ def main() -> None:
         raise SystemExit("at least one --trace-glob or --trace-list is required")
     if args.batch_size <= 0:
         raise SystemExit("--batch-size must be positive")
-    listed = []
-    for path in args.trace_list:
-        with open(path, encoding="utf-8") as fh:
-            listed.extend(line.strip() for line in fh
-                          if line.strip() and not line.lstrip().startswith("#"))
+    def read_lists(paths):
+        rows = []
+        for path in paths:
+            with open(path, encoding="utf-8") as fh:
+                rows.extend(line.strip() for line in fh
+                            if line.strip() and not line.lstrip().startswith("#"))
+        return rows
+
+    listed = read_lists(args.trace_list)
+    excluded = read_lists(args.exclude_list)
     static_metadata = ({"trace_scope": args.trace_scope}
                        if args.trace_scope else {})
+    if args.collection_id:
+        static_metadata["collection_id"] = args.collection_id
     importer = LegacyTraceImporter(
         args.trace_glob, Path(args.spool_dir), source_paths=listed,
+        excluded_paths=excluded,
         static_metadata=static_metadata,
     )
     loop = WorkerLoop(

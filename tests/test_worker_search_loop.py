@@ -177,9 +177,9 @@ def test_legacy_import_accepts_exact_sources_and_static_scope(tmp_path):
 
     spool = tmp_path / "spool"
     importer = LegacyTraceImporter(
-        [], spool, source_paths=[selected],
+        [str(tmp_path / "*.npz")], spool, excluded_paths=[excluded],
         enrich=lambda _: {"boss_weapon": "Spread"},
-        static_metadata={"trace_scope": "boss_fight"},
+        static_metadata={"trace_scope": "boss_fight", "collection_id": "extra-v1"},
     )
     uploader = RecordingUploader()
     loop = WorkerLoop(spool, uploader, importer, worker_id="boss", batch_size=1)
@@ -193,6 +193,7 @@ def test_legacy_import_accepts_exact_sources_and_static_scope(tmp_path):
     manifest = json.loads((uploader.uploads[0][0] / "manifest.json").read_text())
     assert len(manifest["traces"]) == 1
     assert manifest["traces"][0]["trace_scope"] == "boss_fight"
+    assert manifest["traces"][0]["collection_id"] == "extra-v1"
     assert manifest["traces"][0]["legacy_source_file"] == selected.name
 
 

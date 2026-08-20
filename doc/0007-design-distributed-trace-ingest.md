@@ -70,11 +70,13 @@ Every trace records `trace_scope`: `full_level` beneath `level1/full` and
 `boss_fight` beneath `level1/boss`. The physical prefix prevents accidental
 mixed loading; the manifest field lets catalogs classify traces without relying
 on object paths or initial-state hashes.
-Finite archives also record a stable `collection_id` in every manifest row.
-The canonical 40k-per-weapon set uses `level1-boss-canonical-80k-v1`; valid wins
-outside that selection use `level1-boss-extra-v1`. Consumers therefore opt into
-extra candidates explicitly without treating them as failures or inferring
-membership from producer IDs.
+Finite archives created after this extension record a stable `collection_id` in
+every manifest row. Valid wins outside the canonical 40k-per-weapon selection use
+`level1-boss-extra-v1`, so consumers opt into them explicitly without treating
+them as failures or inferring membership from producer IDs. The immutable 80k
+archive predates this field; its two canonical producer IDs remain its collection
+boundary, and a future catalog ingester normalizes them to
+`level1-boss-canonical-80k-v1`.
 
 ## Legacy trace replay and source preservation
 
