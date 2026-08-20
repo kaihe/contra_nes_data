@@ -6,8 +6,8 @@ Status: Proposed
 storage without losing traces, creating duplicates, or exposing partial uploads?
 
 **Answer.** Google Drive is the primary durable store. Each worker saves wins
-atomically on local disk and closes a batch at 100 traces, five minutes, or
-graceful shutdown. It uploads a compressed archive and manifest through
+atomically on local disk and closes a batch at exactly 100 traces. It uploads a
+compressed archive and manifest through
 resumable Drive API sessions, then creates `COMMITTED.json` as the visibility
 boundary. One ingester validates committed batches, deduplicates trace
 fingerprints, and owns canonical metadata. Workers never write shared SQLite or
@@ -69,7 +69,9 @@ files with one batch ID are duplicates and conflicting copies are quarantined.
 ## Resumable worker commit protocol
 
 1. Write each NPZ to a temporary local name, `fsync`, then rename atomically.
-2. Close a batch at 100 wins, five minutes, or graceful shutdown.
+2. Close a batch at 100 wins. Graceful shutdown leaves a partial batch in the
+   local journal for the next launch; an explicit final flush may close it early
+   when permanently retiring a worker.
 3. Build `manifest.json` and `traces.tar.zst` atomically on local disk.
 4. Create or find the Drive batch folder by `batch_id`. Upload archive and
    manifest with resumable sessions; retry 403, 429, and 5xx responses with
