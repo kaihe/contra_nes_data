@@ -15,21 +15,7 @@ write the shared SQLite catalog or derive their action prior from live output.
 
 ---
 
-## 1. Why — the evidence
-
-One-object-per-trace makes discovery, retry, and lifecycle operations scale with
-episode count. Direct concurrent writes to `catalog.sqlite` are unsafe across
-machines, while copying whole worker directories provides no atomic boundary:
-consumers can observe partial uploads and retries can create duplicates.
-
-The current search also rebuilds its action prior from every matching NPZ in the
-output directory in the parent and every new worker pool. Distributed output
-must therefore be separated from a fixed, versioned search prior; otherwise each
-worker has a different, ever-growing policy and startup cost.
-
-## 2. The design
-
-### Roles and identity
+## Worker identity and ownership
 
 | role | responsibility |
 |---|---|
@@ -43,7 +29,12 @@ Every launch receives a random `run_id`; each machine receives a stable
 human-readable, but identity is the SHA-256 fingerprint of normalized initial
 state, actions, frame skip, level, and goal—not a timestamp or filename.
 
-### Object layout
+## Immutable object layout
+
+One-object-per-trace makes discovery, retry, and lifecycle operations scale with
+episode count. Copying whole worker directories provides no atomic boundary:
+consumers can observe partial uploads and retries can create duplicates. Batches
+provide one immutable visibility unit:
 
 ```text
 mc-traces/v1/level1/full/
@@ -59,7 +50,7 @@ and `manifest.json`; the manifest records each trace's fingerprint, member name,
 SHA-256, byte size, outcome, action/search steps, sampled actions, deaths,
 wall-clock time, and initial-state/config provenance.
 
-### Worker commit protocol
+## Worker commit protocol
 
 1. Write each NPZ to a temporary local name, `fsync`, then rename atomically.
 2. Close a batch at 100 wins, five minutes, or graceful shutdown.
@@ -75,7 +66,7 @@ An archive without a commit marker is invisible and eligible for garbage
 collection after 24 hours. A marker is the visibility boundary; there is no
 rename assumption because common object stores do not provide one.
 
-### Ingest protocol
+## Canonical ingestion and deduplication
 
 One logical ingester lists commit markers, claims each marker through its own
 durable queue/lease, verifies all hashes and manifest invariants, and computes
@@ -88,7 +79,7 @@ The ingester owns the searchable metadata database. Cloud workers never open
 shards, not partially ingested raw searches. Raw-search metadata gets a separate
 database whose schema can later be designed around the fields above.
 
-### Recovery and operation
+## Recovery, monitoring, and fixed priors
 
 Workers keep a local journal with batch state: `open`, `uploaded`, `committed`,
 or `acknowledged`. Startup resumes the oldest non-acknowledged batch before new
@@ -101,37 +92,16 @@ acknowledgement. Alerts fire when the oldest committed batch is unacknowledged
 for 15 minutes or a worker has not committed for twice its expected batch time.
 
 The search prior is a compact immutable artifact identified by SHA-256 in
-`worker.json`. Every worker in a run uses the same prior for its lifetime.
+`worker.json`. Every worker in a run uses the same prior for its lifetime. It is
+never rebuilt from live output: that would make workers incomparable and make
+startup cost grow with the dataset.
 
-## 3. What was rejected, and why
+Operational gates live with this feature: fewer than 0.5% wins lost in a
+10-worker interruption test; median archive size 1–64 MiB; duplicate rate below
+1%; p95 commit-to-ack below 15 minutes at twice the planned worker count; and
+zero accepted checksum mismatches during fault injection.
 
-**Upload every NPZ immediately.** It minimizes the loss window but creates many
-small objects and requests, and cannot atomically pair data with metadata.
-
-**Share a mounted directory or SQLite file.** Network filesystems hide neither
-partial files nor SQLite locking/failure semantics and couple workers to one
-region and mount implementation.
-
-**Let every worker update the catalog.** Multi-writer coordination, retries, and
-schema migration become part of the hot search path. One ingester makes the
-commit boundary auditable.
-
-**Continuously learn the prior from new wins.** Workers would cease to be
-comparable, repeated NPZ scans would grow without bound, and generation could
-amplify early sampling bias. Updating the prior is a separate versioned run.
-
-## 4. Risks, and the metric that gates each
-
-| risk | why it is plausible | gate |
-|---|---|---|
-| five-minute batches lose too much on spot eviction | local disks may vanish | fewer than 0.5% generated wins lost in a 10-worker interruption test |
-| 100 traces is a poor object size | trace lengths vary | median archive 1–64 MiB; adjust count if outside |
-| duplicate generation wastes compute | workers share start/prior | duplicate fingerprint rate below 1% per run |
-| ingestion falls behind search | validation is serial | p95 commit-to-ack below 15 minutes at 2× planned worker count |
-| archive corruption is accepted | interrupted uploads happen | zero accepted checksum mismatches in fault injection |
-| fixed prior degrades over scales | diversity may saturate | compare win/hour and action n-grams before changing prior version |
-
-## 5. Sequencing
+## Staged scale-up
 
 1. Measure 1,000 current NPZ sizes and archive 100; accept the default only if
    the archive-size gate passes.
@@ -150,7 +120,7 @@ datahouse builder, not raw cloud batches.
 
 ---
 
-## Appendix — provenance
+## Provenance and auditability
 
 | claim | source |
 |---|---|
@@ -158,4 +128,3 @@ datahouse builder, not raw cloud batches.
 | parent and each pool worker rebuild the sampler | `agent.mc_search._run_one_search`, `_worker_init` |
 | token-shard catalog has a single transactional owner | `doc/0004-design-tokenized-datahouse.md` |
 | remote bootstrap separates ROM and generated data from Git | `deploy/README.md`, `deploy/setup_cloud_worker.sh` |
-
