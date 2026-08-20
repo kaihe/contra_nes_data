@@ -56,6 +56,9 @@ identity, machine shape, start time, and software versions. `manifest.json` is
 stored both beside and inside the archive. For every trace it records
 fingerprint, member name, SHA-256, byte size, outcome, action/search steps,
 sampled actions, deaths, wall-clock time, and initial-state/config provenance.
+Full traces also carry `boss_weapon`, `boss_rapid`, and zero-based
+`boss_entry_step`, captured from RAM at the boss-scene edge. This makes Spread
+and rapid-fire filtering a metadata query rather than an ingestion-time replay.
 
 Google Drive permits duplicate names, so paths are not identity. Bootstrap
 records the Drive folder ID for `schema-v1`; journals and markers record all
