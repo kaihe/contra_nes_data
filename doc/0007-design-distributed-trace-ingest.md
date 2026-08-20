@@ -61,6 +61,17 @@ Full traces also carry `boss_weapon`, `boss_rapid`, and zero-based
 `boss_entry_step`, captured from RAM at the boss-scene edge. This makes Spread
 and rapid-fire filtering a metadata query rather than an ingestion-time replay.
 
+## Legacy trace replay and source preservation
+
+The worker also accepts existing NPZ globs as a finite pseudo-search source. It
+hard-links each source into the durable spool when possible (copying only across
+filesystems), records its SHA-256 in a restart journal, and never edits or deletes
+the source file. Legacy traces missing boss loadout fields are replayed once with
+one persistent emulator; recovered `boss_weapon`, `boss_rapid`, and
+`boss_entry_step` are written into the batch manifest while the archived NPZ
+remains byte-identical. Import closes normal 100-trace batches and explicitly
+flushes its final partial batch.
+
 Every GCS object name is unique within a bucket. Uploads use
 `if_generation_match=0`, so retries cannot overwrite an existing object. Object
 metadata carries `run_id`, `worker_id`, `batch_id`, and schema version. A retry
