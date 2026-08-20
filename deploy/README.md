@@ -141,3 +141,17 @@ for example `level1/boss` and `level2/full`. Restarting the same command skips
 journaled traces, resumes uploads, and finishes the existing open batch. Once
 all sources are consumed, the importer explicitly uploads the final partial
 batch.
+
+Canonical bulk collections may provide an exact catalog-selected source list
+and use larger archives. Boss archives use 1,000 traces and record their scope
+explicitly in every manifest row:
+
+```bash
+python -u -m worker.legacy_import \
+  --gcs-root "gs://BUCKET/contra-mc-tracehouse/schema-v1/level1/boss" \
+  --spool-dir game_trace/legacy_upload_spool/level1-boss-80k \
+  --worker-id level1-boss-canonical-80k \
+  --trace-list /path/to/catalog-selection.txt \
+  --batch-size 1000 \
+  --trace-scope boss_fight
+```

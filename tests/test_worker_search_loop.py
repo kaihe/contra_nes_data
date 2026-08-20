@@ -169,6 +169,33 @@ def test_legacy_import_preserves_npz_and_enriches_manifest(tmp_path):
         resumed_loop.close()
 
 
+def test_legacy_import_accepts_exact_sources_and_static_scope(tmp_path):
+    selected = tmp_path / "selected.npz"
+    excluded = tmp_path / "excluded.npz"
+    for path in (selected, excluded):
+        save_trace(b"state", [np.zeros(9, dtype=np.uint8)], str(path))
+
+    spool = tmp_path / "spool"
+    importer = LegacyTraceImporter(
+        [], spool, source_paths=[selected],
+        enrich=lambda _: {"boss_weapon": "Spread"},
+        static_metadata={"trace_scope": "boss_fight"},
+    )
+    uploader = RecordingUploader()
+    loop = WorkerLoop(spool, uploader, importer, worker_id="boss", batch_size=1)
+    try:
+        assert loop.run() == 1
+        loop.upload_queue.join()
+    finally:
+        importer.close()
+        loop.close()
+
+    manifest = json.loads((uploader.uploads[0][0] / "manifest.json").read_text())
+    assert len(manifest["traces"]) == 1
+    assert manifest["traces"][0]["trace_scope"] == "boss_fight"
+    assert manifest["traces"][0]["legacy_source_file"] == selected.name
+
+
 def test_legacy_replay_recovers_spread_rapid_at_boss_edge(tmp_path, monkeypatch):
     trace = tmp_path / "legacy.npz"
     np.savez_compressed(trace, initial_state=np.frombuffer(b"state", dtype=np.uint8),

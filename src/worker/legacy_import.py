@@ -91,14 +91,17 @@ def make_replay_env():
 class LegacyTraceImporter:
     """Finite search-compatible source with replay enrichment and restart journal."""
 
-    def __init__(self, patterns: list[str], spool_dir: Path, *, enrich=None):
+    def __init__(self, patterns: list[str], spool_dir: Path, *, source_paths=(),
+                 enrich=None, static_metadata: dict | None = None):
         self.spool_dir = Path(spool_dir)
         self.journal = self.spool_dir / "legacy_import.jsonl"
         self.imported = self._load_imported()
         sources = {Path(item).resolve() for pattern in patterns
                    for item in glob.iglob(pattern, recursive=True)}
+        sources.update(Path(item).resolve() for item in source_paths)
         self.sources = iter(sorted(path for path in sources if path.is_file()))
         self.enrich = enrich
+        self.static_metadata = dict(static_metadata or {})
         self.env = None
         self.pending: tuple[Path, str] | None = None
 
@@ -140,10 +143,12 @@ class LegacyTraceImporter:
 
     def _metadata(self, source: Path) -> dict:
         if self.enrich is not None:
-            return self.enrich(source)
-        if self.env is None:
-            self.env = make_replay_env()
-        return recover_boss_loadout(source, self.env)
+            recovered = self.enrich(source)
+        else:
+            if self.env is None:
+                self.env = make_replay_env()
+            recovered = recover_boss_loadout(source, self.env)
+        return {**recovered, **self.static_metadata}
 
     def saved(self, destination: Path) -> None:
         source, digest = self.pending
@@ -168,17 +173,37 @@ def _parse_args():
     parser.add_argument("--gcs-root", required=True)
     parser.add_argument("--spool-dir", default="game_trace/legacy_upload_spool")
     parser.add_argument("--worker-id")
-    parser.add_argument("--trace-glob", action="append", required=True,
+    parser.add_argument("--trace-glob", action="append", default=[],
                         help="quoted NPZ glob; may be repeated")
+    parser.add_argument("--trace-list", action="append", default=[],
+                        help="UTF-8 file containing one source NPZ path per line")
+    parser.add_argument("--batch-size", type=int, default=100,
+                        help="traces per archive (default: 100)")
+    parser.add_argument("--trace-scope", choices=("full_level", "boss_fight"),
+                        help="explicit collection class stored in each manifest row")
     return parser.parse_args()
 
 
 def main() -> None:
     args = _parse_args()
-    importer = LegacyTraceImporter(args.trace_glob, Path(args.spool_dir))
+    if not args.trace_glob and not args.trace_list:
+        raise SystemExit("at least one --trace-glob or --trace-list is required")
+    if args.batch_size <= 0:
+        raise SystemExit("--batch-size must be positive")
+    listed = []
+    for path in args.trace_list:
+        with open(path, encoding="utf-8") as fh:
+            listed.extend(line.strip() for line in fh
+                          if line.strip() and not line.lstrip().startswith("#"))
+    static_metadata = ({"trace_scope": args.trace_scope}
+                       if args.trace_scope else {})
+    importer = LegacyTraceImporter(
+        args.trace_glob, Path(args.spool_dir), source_paths=listed,
+        static_metadata=static_metadata,
+    )
     loop = WorkerLoop(
         Path(args.spool_dir), GCSUploader(args.gcs_root), importer,
-        worker_id=args.worker_id,
+        worker_id=args.worker_id, batch_size=args.batch_size,
     )
     signal.signal(signal.SIGINT, lambda *_: loop.stop.set())
     signal.signal(signal.SIGTERM, lambda *_: loop.stop.set())
