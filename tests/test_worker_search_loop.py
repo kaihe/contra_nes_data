@@ -1,11 +1,12 @@
 import hashlib
 import json
 from pathlib import Path
+import base64
 
 import numpy as np
 
 from agent.mc_search import SearchEffort, save_trace
-from worker.search_loop import RcloneUploader, WorkerLoop
+from worker.search_loop import GCSUploader, WorkerLoop
 
 
 class RecordingUploader:
@@ -77,31 +78,51 @@ def test_restart_continues_partial_batch_and_explicit_flush_seals_it(tmp_path):
     assert manifest["trace_count"] == 2
 
 
-def test_rclone_uploader_verifies_payloads_and_commits_last(tmp_path):
+def test_gcs_uploader_verifies_payloads_and_commits_last(tmp_path):
     batch = tmp_path / "batch-a"
     batch.mkdir()
     (batch / "traces.tar.zst").write_bytes(b"archive")
     (batch / "manifest.json").write_text(json.dumps({"traces": [{}, {}]}))
 
-    class FakeRclone(RcloneUploader):
+    class FakeBlob:
+        def __init__(self, name):
+            self.name = name
+            self.uploads = []
+            self.generation = len(bucket.blobs) + 10
+
+        def upload_from_filename(self, filename, **kwargs):
+            source = Path(filename)
+            self.uploads.append((source, kwargs))
+            self.size = source.stat().st_size
+            digest = hashlib.md5(source.read_bytes()).digest()
+            self.md5_hash = base64.b64encode(digest).decode("ascii")
+
+        def reload(self):
+            pass
+
+    class FakeBucket:
+        name = "trace-bucket"
+
         def __init__(self):
-            super().__init__("gdrive:root")
-            self.commands = []
+            self.blobs = []
 
-        def _run(self, *args):
-            self.commands.append(args)
-            if args[0] != "lsjson":
-                return ""
-            name = Path(args[1]).name
-            source = batch / name
-            digest = hashlib.md5(source.read_bytes()).hexdigest()
-            return json.dumps([{"Size": source.stat().st_size,
-                                "Hashes": {"MD5": digest}}])
+        def blob(self, name):
+            blob = FakeBlob(name)
+            self.blobs.append(blob)
+            return blob
 
-    uploader = FakeRclone()
+    class FakeClient:
+        def bucket(self, name):
+            assert name == "trace-bucket"
+            return bucket
+
+    bucket = FakeBucket()
+    uploader = GCSUploader("gs://trace-bucket/root", client=FakeClient())
     uploader.upload(batch, "worker-a", "batch-a")
 
-    assert uploader.commands[-1][0] == "copyto"
-    assert uploader.commands[-1][-1].endswith("/COMMITTED.json")
+    assert bucket.blobs[-1].name.endswith("/COMMITTED.json")
+    assert all(blob.uploads[0][1]["if_generation_match"] == 0
+               for blob in bucket.blobs)
     marker = json.loads((batch / "COMMITTED.json").read_text())
     assert marker["trace_count"] == 2
+    assert set(marker["object_generations"]) == {"traces.tar.zst", "manifest.json"}

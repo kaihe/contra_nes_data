@@ -65,18 +65,22 @@ bash deploy/setup_cloud_worker.sh
 Success ends with `Cloud worker ready: Contra-Nes`. Re-running the script updates
 the checkout with `git pull --ff-only` and reuses `.venv`.
 
-## 4. Connect Google Drive
+## 4. Connect Google Cloud Storage
 
-The bootstrap installs `rclone`. Configure a Drive remote named `gdrive` and
-complete its OAuth flow before starting production:
+Create a dedicated GCS bucket and grant the worker service account Storage
+Object Creator and Storage Object Viewer on that bucket. The worker uses Google
+Application Default Credentials (ADC). On a non-GCP machine, place its credential
+configuration outside the repository and point ADC to it:
 
 ```bash
-rclone config
-rclone lsd "gdrive:"
+install -d -m 700 /root/.config/contra
+install -m 600 /secure/source/worker-credential.json \
+  /root/.config/contra/gcs-worker.json
+export GOOGLE_APPLICATION_CREDENTIALS=/root/.config/contra/gcs-worker.json
 ```
 
-The rclone configuration contains credentials. Keep it outside the repository
-and restrict its permissions to the worker account.
+Prefer Workload Identity Federation over a long-lived service-account key when
+the cloud provider supports it. Never put either credential form in Git or `.env`.
 
 ## 5. Start the persistent Level 1 worker
 
@@ -87,7 +91,7 @@ cd /root/code/contra_nes_data
 source .venv/bin/activate
 mkdir -p game_trace/worker_spool
 python -u -m worker.search_loop \
-  --drive-remote "gdrive:Contra MC Tracehouse/schema-v1/level1/full" \
+  --gcs-root "gs://BUCKET/contra-mc-tracehouse/schema-v1/level1/full" \
   --spool-dir game_trace/worker_spool \
   --level 1 \
   --rollouts 16 --rollout-len 24 --settle-margin 8 \
@@ -109,10 +113,10 @@ find game_trace/worker_spool -path '*/traces/*.npz' | wc -l
 
 # Permanently retire this worker and upload its final partial batch
 python -m worker.search_loop \
-  --drive-remote "gdrive:Contra MC Tracehouse/schema-v1/level1/full" \
+  --gcs-root "gs://BUCKET/contra-mc-tracehouse/schema-v1/level1/full" \
   --spool-dir game_trace/worker_spool --flush
 ```
 
 `Ctrl-C` stops after the active search returns and leaves a partial batch open
 for the next launch. Use `--flush` only before permanently deleting the worker.
-Do not delete the spool until the corresponding Drive acknowledgement exists.
+Do not delete the spool until the corresponding GCS acknowledgement exists.

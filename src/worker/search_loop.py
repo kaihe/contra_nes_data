@@ -2,7 +2,7 @@
 
 Every winning trace is first written beneath a durable local spool. A batch is
 sealed only at 100 wins (or by the explicit ``--flush`` command), archived, and
-queued to a background rclone uploader. ``COMMITTED.json`` is uploaded last and
+queued to a background GCS uploader. ``COMMITTED.json`` is uploaded last and
 is the remote visibility boundary. Restarting the process resumes sealed batches
 and continues filling the one open batch.
 """
@@ -95,34 +95,57 @@ def trace_record(path: Path) -> dict:
     return record
 
 
-class RcloneUploader:
-    """Upload and verify one sealed batch using an existing rclone remote."""
+class GCSUploader:
+    """Create immutable GCS batch objects using Application Default Credentials."""
 
-    def __init__(self, remote_root: str):
-        self.remote_root = remote_root.rstrip("/")
+    def __init__(self, gcs_root: str, *, client=None):
+        if not gcs_root.startswith("gs://"):
+            raise ValueError("GCS root must start with gs://")
+        bucket_name, _, prefix = gcs_root[5:].partition("/")
+        if not bucket_name:
+            raise ValueError("GCS root must include a bucket name")
+        if client is None:
+            from google.cloud import storage
+            client = storage.Client()
+        self.bucket = client.bucket(bucket_name)
+        self.prefix = prefix.strip("/")
 
-    def _run(self, *args: str) -> str:
-        result = subprocess.run(
-            ["rclone", *args], check=True, text=True,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        )
-        return result.stdout
+    def _object_name(self, worker_id: str, batch_id: str, filename: str) -> str:
+        relative = f"batches/{worker_id}/{batch_id}/{filename}"
+        return f"{self.prefix}/{relative}" if self.prefix else relative
+
+    def _upload_object(self, source: Path, object_name: str, metadata: dict) -> int:
+        blob = self.bucket.blob(object_name)
+        blob.metadata = metadata
+        try:
+            blob.upload_from_filename(
+                str(source), if_generation_match=0, checksum="auto", timeout=300)
+        except Exception as exc:
+            # A retry may encounter the immutable object created by its previous
+            # attempt. Only accept that case after the same integrity checks.
+            if getattr(exc, "code", None) != 412:
+                raise
+        blob.reload()
+        if int(blob.size) != source.stat().st_size:
+            raise RuntimeError(f"remote size mismatch for gs://{self.bucket.name}/{object_name}")
+        import base64
+        local_md5 = base64.b64encode(bytes.fromhex(_md5(source))).decode("ascii")
+        if blob.md5_hash != local_md5:
+            raise RuntimeError(f"remote MD5 mismatch for gs://{self.bucket.name}/{object_name}")
+        return int(blob.generation)
 
     def upload(self, batch_dir: Path, worker_id: str, batch_id: str) -> None:
-        remote = f"{self.remote_root}/batches/{worker_id}/{batch_id}"
         archive = batch_dir / "traces.tar.zst"
         manifest = batch_dir / "manifest.json"
+        metadata = {
+            "schema_version": str(SCHEMA_VERSION),
+            "worker_id": worker_id,
+            "batch_id": batch_id,
+        }
+        generations = {}
         for source in (archive, manifest):
-            target = f"{remote}/{source.name}"
-            self._run("copyto", str(source), target)
-            listing = json.loads(self._run("lsjson", target, "--hash"))
-            item = listing[0] if isinstance(listing, list) else listing
-            if int(item["Size"]) != source.stat().st_size:
-                raise RuntimeError(f"remote size mismatch for {target}")
-            hashes = {key.lower(): value.lower()
-                      for key, value in item.get("Hashes", {}).items()}
-            if hashes.get("md5") != _md5(source):
-                raise RuntimeError(f"remote MD5 mismatch for {target}")
+            name = self._object_name(worker_id, batch_id, source.name)
+            generations[source.name] = self._upload_object(source, name, metadata)
 
         marker = {
             "schema_version": SCHEMA_VERSION,
@@ -131,11 +154,13 @@ class RcloneUploader:
             "trace_count": len(json.loads(manifest.read_text())["traces"]),
             "archive_sha256": _sha256(archive),
             "manifest_sha256": _sha256(manifest),
+            "object_generations": generations,
             "committed_at": time.time(),
         }
-        _atomic_json(batch_dir / "COMMITTED.json", marker)
-        self._run("copyto", str(batch_dir / "COMMITTED.json"),
-                  f"{remote}/COMMITTED.json")
+        marker_path = batch_dir / "COMMITTED.json"
+        _atomic_json(marker_path, marker)
+        name = self._object_name(worker_id, batch_id, marker_path.name)
+        self._upload_object(marker_path, name, metadata)
 
 
 class WorkerLoop:
@@ -282,9 +307,9 @@ class WorkerLoop:
 
 
 def _parse_args():
-    parser = argparse.ArgumentParser(description="Persistent MC search and Drive upload worker")
-    parser.add_argument("--drive-remote", required=True,
-                        help="rclone path through level/goal, e.g. gdrive:Contra MC Tracehouse/schema-v1/level1/full")
+    parser = argparse.ArgumentParser(description="Persistent MC search and GCS upload worker")
+    parser.add_argument("--gcs-root", required=True,
+                        help="GCS URI through level/goal, e.g. gs://bucket/contra-mc-tracehouse/schema-v1/level1/full")
     parser.add_argument("--spool-dir", default="game_trace/worker_spool")
     parser.add_argument("--worker-id")
     parser.add_argument("--flush", action="store_true",
@@ -315,7 +340,7 @@ def main() -> None:
         )
 
     loop = WorkerLoop(
-        Path(args.spool_dir), RcloneUploader(args.drive_remote), search_one,
+        Path(args.spool_dir), GCSUploader(args.gcs_root), search_one,
         worker_id=args.worker_id,
     )
     signal.signal(signal.SIGINT, lambda *_: loop.stop.set())
