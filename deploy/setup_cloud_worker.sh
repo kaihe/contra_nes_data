@@ -22,13 +22,17 @@ if [[ -z "${rom_path}" || ! -f "${rom_path}" ]]; then
     exit 2
 fi
 
-if ! command -v sudo >/dev/null 2>&1; then
-    echo "sudo is required to install Ubuntu system packages." >&2
+if [[ "${EUID}" -eq 0 ]]; then
+    apt=(apt-get)
+elif command -v sudo >/dev/null 2>&1; then
+    apt=(sudo apt-get)
+else
+    echo "Run as root or install sudo to provision Ubuntu system packages." >&2
     exit 2
 fi
 
-sudo apt-get update
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+"${apt[@]}" update
+DEBIAN_FRONTEND=noninteractive "${apt[@]}" install -y \
     build-essential git python3-dev python3-pip python3-venv
 
 if [[ -d "${project_dir}/.git" ]]; then

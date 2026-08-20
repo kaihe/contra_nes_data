@@ -10,6 +10,9 @@ game_trace/
 # claude code personal/local settings
 .claude/settings.local.json
 
+# machine-specific environment (ROM path, cloud checkout, credentials)
+.env
+
 # python
 __pycache__/
 *.py[cod]
