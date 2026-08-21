@@ -1,4 +1,4 @@
-# Store four discrete image codes and combine them per frame
+# Feed four discrete image codes directly to the policy
 
 Status: Proposed
 
@@ -9,8 +9,8 @@ policy training?
 **Answer.** Train a datahouse-owned VQ image autoencoder offline and initially encode
 each frame as a 2×2 grid of four `uint16` codes. Shards store only these codes, actions,
 boundaries, and metadata. The policy learns code and slot embeddings, combines the four
-codes into one frame representation, and sends one position per frame to the temporal
-transformer. Four codes are accepted only if reconstruction, entity visibility, and
+codes through its normal attention layers, and uses four consecutive sequence positions
+per frame. Four codes are accepted only if reconstruction, entity visibility, and
 closed-loop policy gates match raw RGB; otherwise increase the code count to 8, 16, or
 32 without changing the shard protocol.
 
@@ -40,27 +40,29 @@ encoder weights, codebook, spatial layout, and code dtype. Loaders reject mixed
 identities. Re-encoding publishes a new collection rather than mutating existing
 shards.
 
-## A frame combiner preserves the temporal horizon
+## Four policy positions preserve spatial detail
 
 The four codes describe fixed positions in a 2×2 spatial grid. The policy performs
-four trainable embedding lookups, adds a learned slot embedding to distinguish the
-positions, and combines the result with a small MLP or one-layer attention pool:
+four trainable embedding lookups and adds a learned slot embedding to distinguish the
+positions:
 
 ```text
-[c_t,0, c_t,1, c_t,2, c_t,3] -> four embeddings -> frame combiner -> z_t
+frame t -> [top-left, top-right, bottom-left, bottom-right] -> four GPT positions
 ```
 
-Only `z_t` enters the temporal transformer. This retains one temporal position per
-frame, so the existing rolling window keeps the same number of game frames. Sending
-four codes directly through the temporal transformer would make a fixed-frame window
-four times longer and full-attention work roughly sixteen times larger; shortening the
-window would discard three quarters of the history.
+There is no frame combiner before the temporal transformer. The action prediction
+after the fourth position can attend to all four regions and merge them differently
+for each game context. This avoids introducing a second learned bottleneck after the
+VQ encoder.
 
 Actions are predicted only after all four codes for a frame are available. Goal images
-use the same tokenizer and frame combiner. Policy checkpoints own the learned code
-embeddings and combiner; the datahouse decoder retains a separate immutable embedding
-table for reconstruction. Policy learning therefore cannot change what stored code
-indices mean or break dataset reproducibility.
+use the same four-token order. Rolling windows are specified in frames, aligned to
+frame boundaries, and expanded to four image positions per included frame. The design
+accepts four times as many image positions and up to roughly sixteen times the
+full-attention work for the same frame horizon. Policy checkpoints own the learned code
+and slot embeddings; the datahouse decoder retains a separate immutable embedding table
+for reconstruction. Policy learning therefore cannot change what stored code indices
+mean or break dataset reproducibility.
 
 ## Detail-preserving training targets native game structure
 
