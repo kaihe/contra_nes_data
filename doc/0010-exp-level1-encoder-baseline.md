@@ -1,6 +1,6 @@
 # Can image tokens preserve Spread and Laser projectiles?
 
-Status: Proposed
+Status: Implemented
 
 ## 1. Goal
 
@@ -14,7 +14,8 @@ Do not pool the weapons or include Regular, Flamethrower, or enemy bullets.
 Freeze 1,000 unique canonical Spread and 1,000 unique canonical Laser traces from the
 committed canonical GCS boss prefixes. Select the smallest fingerprints per weapon,
 then assign the first 800 to training and last 200 to validation. Record every source
-object generation and fingerprint in `l1-boss-projectile-probe-v1.json`. Boss-only
+object generation and fingerprint in
+`runs/encoder-baseline/l1-boss-projectile-probe-v1/snapshot.json`. Boss-only
 traces make the manifest weapon valid for every frame. Both weapons receive identical
 episode counts, frame sampling, optimizer steps, seeds, and validation exposure.
 Canonical Spread uses `full_spread.state` with rapid fire; canonical Laser uses
@@ -59,6 +60,36 @@ stays above zero. A larger Laser gap than Spread localizes the concern to Laser 
 detail. If the published head trails the fresh token probe, head training—not token
 capacity—explains that portion of the deficit.
 
+The frozen snapshot contains 1,000 episodes per weapon and 186,524 observations in
+total. Validation contains 200 episodes per weapon: 15,698 Spread observations
+(13,641 positive) and 21,997 Laser observations (17,823 positive). The matched learned
+comparison uses seed 0. Two additional completed token-probe seeds are retained as
+supplemental artifacts but excluded because no matching direct-image seeds were run.
+
+| weapon | published Dice | fresh-token Dice | direct-image Dice | paired RGB − token Dice (95% CI) |
+|---|---:|---:|---:|---:|
+| Spread | 0.7685 | 0.8533 | 0.7861 | −0.0673 [−0.0708, −0.0639] |
+| Laser | 0.8278 | 0.9277 | 0.8961 | −0.0331 [−0.0353, −0.0308] |
+
+The paired intervals use 10,000 whole-episode bootstrap samples. Both gaps are
+negative, so neither weapon satisfies the predeclared token-information-loss rule.
+
+| weapon | arm | MSE skill | peak hit |
+|---|---|---:|---:|
+| Spread | published control | 0.5213 | 0.8911 |
+| Spread | fresh token probe | 0.6733 | 0.9342 |
+| Spread | direct-image CNN | 0.5433 | 0.9484 |
+| Laser | published control | 0.6544 | 0.8409 |
+| Laser | fresh token probe | 0.8723 | 0.9589 |
+| Laser | direct-image CNN | 0.8320 | 0.9670 |
+
+The token head has 2,790,337 trainable parameters and ran at 13,768 sampled frames/s;
+the direct-image CNN has 169,217 parameters and ran at 1,449 sampled frames/s. These
+throughput figures divide 1.28 million sampled training frames by total train-plus-
+validation wall time, so they are conservative and intended only as run diagnostics.
+Machine-readable metrics are in
+`runs/encoder-baseline/l1-boss-projectile-probe-v1/results/summary.json`.
+
 ## 4. Conclusion
 
-Pending measurements and user conclusion.
+Awaiting user conclusion.
