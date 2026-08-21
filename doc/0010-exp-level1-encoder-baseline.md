@@ -1,13 +1,13 @@
-# Does one image token preserve player-projectile localization?
+# Can image tokens preserve Spread and Laser projectiles?
 
 Status: Proposed
 
 ## 1. Goal
 
-Test whether compressing a game image into the frozen 512-D datahouse token removes
-player-projectile detail needed for Laser control. Compare a freshly trained heatmap
-probe over frozen tokens with a CNN that predicts the same heatmap directly from RGB.
-Make the decision separately for Spread and Laser on balanced boss-fight data.
+Test whether the frozen 512-D datahouse token preserves the two player-projectile
+patterns used by the policy experiments: multi-pellet Spread shots and elongated Laser
+shots. Compare a fresh token probe with a direct-image CNN on balanced boss-fight data.
+Do not pool the weapons or include Regular, Flamethrower, or enemy bullets.
 
 ## 2. Setup
 
@@ -18,16 +18,17 @@ object generation and fingerprint in `l1-boss-projectile-probe-v1.json`. Boss-on
 traces make the manifest weapon valid for every frame. Both weapons receive identical
 episode counts, frame sampling, optimizer steps, seeds, and validation exposure.
 
-The target is the RAM-derived 32×32 player-bullet occupancy map with sigma 6 screen
-pixels. Train with weighted BCE (`pos_weight=10`), AdamW, learning rate `3e-4`, cosine
+The target is the RAM-derived 32×32 player-projectile occupancy map with sigma 6 screen
+pixels. It represents every simultaneously live Spread pellet or Laser segment rather
+than reducing a shot to one point. Train with weighted BCE (`pos_weight=10`), AdamW, learning rate `3e-4`, cosine
 decay, 500 warmup steps, 20,000 total steps, and seeds 0, 1, and 2. Sample weapons
 equally and use the same positive/empty-frame policy in both learned arms.
 
 | run | input and trainable path | purpose |
 |---|---|---|
-| published control | frozen encoder `f36041bc…1923c` plus its published entity head | measure current behavior without fitting on the new snapshot |
-| fresh token probe | frozen 512-D token plus a newly initialized player-bullet heatmap head | measure information recoverable from the production token |
-| direct-image CNN | RGB image through a fully convolutional encoder-decoder with no vector bottleneck | measure projectile information available directly from pixels |
+| published control | frozen encoder `f36041bc…1923c` plus its published player-bullet channel | measure current Spread and Laser behavior without fitting on the snapshot |
+| fresh token probe | frozen 512-D token plus a new player-projectile heatmap head | measure each weapon pattern recoverable from the production token |
+| direct-image CNN | RGB image through a fully convolutional encoder-decoder with no vector bottleneck | measure each weapon pattern available directly from pixels |
 
 The completed full-trace control remains a distribution check: on 1,000 held-out
 episodes it measured player-bullet Dice 0.6734, MSE skill 0.2889, and peak hit 0.7522
@@ -36,7 +37,8 @@ boss snapshot because its episode distribution differs.
 
 ## 3. Evaluation metrics
 
-Report every metric separately for the 200 Spread and 200 Laser validation episodes.
+Report every metric separately for the 200 Spread and 200 Laser validation episodes;
+there is no pooled headline score.
 Aggregate by frame for continuity with the encoder baseline and bootstrap whole
 episodes for 95% confidence intervals.
 
