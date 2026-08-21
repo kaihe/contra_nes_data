@@ -11,12 +11,15 @@ Do not pool the weapons or include Regular, Flamethrower, or enemy bullets.
 
 ## 2. Setup
 
-Freeze 1,000 unique non-rapid Spread and 1,000 unique non-rapid Laser traces from the
+Freeze 1,000 unique canonical Spread and 1,000 unique canonical Laser traces from the
 committed canonical GCS boss prefixes. Select the smallest fingerprints per weapon,
 then assign the first 800 to training and last 200 to validation. Record every source
 object generation and fingerprint in `l1-boss-projectile-probe-v1.json`. Boss-only
 traces make the manifest weapon valid for every frame. Both weapons receive identical
 episode counts, frame sampling, optimizer steps, seeds, and validation exposure.
+Canonical Spread uses `full_spread.state` with rapid fire; canonical Laser uses
+`full_laser.state` without rapid fire. Therefore only the paired RGB-minus-token gap
+within a weapon is causal; raw Spread-versus-Laser accuracy is descriptive.
 
 The target is the RAM-derived 32×32 player-projectile occupancy map with sigma 6 screen
 pixels. It represents every simultaneously live Spread pellet or Laser segment rather
