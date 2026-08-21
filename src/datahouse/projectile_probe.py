@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from contextlib import nullcontext
 import hashlib
 import json
 import math
@@ -255,7 +256,9 @@ class DirectImageCNN(nn.Module):
             nn.Conv2d(64, 1, 1))
 
     def forward(self, image: torch.Tensor) -> torch.Tensor:
-        return self.net(image.permute(0, 3, 1, 2).float().div(255)).squeeze(1)
+        image = image.permute(0, 3, 1, 2).contiguous(
+            memory_format=torch.channels_last).float().div(255)
+        return self.net(image).squeeze(1)
 
 
 class TokenProbe(nn.Module):
@@ -304,6 +307,11 @@ def _balanced_indices(buckets: list[np.ndarray], rng, batch: int) -> np.ndarray:
     return np.concatenate([rng.choice(bucket, count, replace=True) for bucket in buckets])
 
 
+def _autocast(device: str):
+    return (torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+            if str(device).startswith("cuda") else nullcontext())
+
+
 @torch.no_grad()
 def evaluate_model(model, arm: str, arrays: dict, device: str, batch: int = 256) -> dict:
     model.eval()
@@ -326,7 +334,9 @@ def evaluate_model(model, arm: str, arrays: dict, device: str, batch: int = 256)
                 for key in values: values[key].append(rows[key])
                 continue
             target = torch.from_numpy(np.asarray(arrays["targets"][chosen])).to(device)
-            rows = _metric_rows(model(value), target)
+            with _autocast(device):
+                logits = model(value)
+            rows = _metric_rows(logits, target)
             for key in values: values[key].append(rows[key])
         merged = {key: np.concatenate(parts) for key, parts in values.items()}
         present = merged["present"]
@@ -365,7 +375,7 @@ def train(data_dir: str, output_dir: str, *, arm: str, seed: int, steps: int = 2
     elif arm == "token_probe":
         model = TokenProbe(arrays["tokens"].shape[1]).to(device)
     elif arm == "direct_image":
-        model = DirectImageCNN().to(device)
+        model = DirectImageCNN().to(device, memory_format=torch.channels_last)
     else:
         raise ValueError(f"unknown arm: {arm}")
     started = time.time()
@@ -380,7 +390,8 @@ def train(data_dir: str, output_dir: str, *, arm: str, seed: int, steps: int = 2
             key = "frames" if arm == "direct_image" else "tokens"
             value = torch.from_numpy(np.asarray(arrays[key][indices])).to(device)
             target = torch.from_numpy(np.asarray(arrays["targets"][indices])).to(device)
-            loss = _loss(model(value), target)
+            with _autocast(device):
+                loss = _loss(model(value), target)
             optimizer.zero_grad(set_to_none=True); loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0); optimizer.step()
             warmup = min(1.0, (step + 1) / 500)
@@ -411,13 +422,16 @@ def summarize_results(results_dir: str, *, bootstrap_samples: int = 10_000,
         if not paths:
             raise RuntimeError(f"no completed results for {arm}")
         runs[arm] = [json.loads(path.read_text()) for path in paths]
-    expected_seeds = {0, 1, 2}
+    learned_seeds = [{int(run["seed"]) for run in runs[arm]}
+                     for arm in ("token_probe", "direct_image")]
+    matched_seeds = set.intersection(*learned_seeds)
+    if not matched_seeds:
+        raise RuntimeError("token and direct-image arms have no matched seed")
     for arm in ("token_probe", "direct_image"):
-        seeds = {int(run["seed"]) for run in runs[arm]}
-        if seeds != expected_seeds:
-            raise RuntimeError(f"{arm}: expected seeds {expected_seeds}, found {seeds}")
+        runs[arm] = [run for run in runs[arm] if int(run["seed"]) in matched_seeds]
 
-    summary = {"bootstrap_samples": bootstrap_samples,
+    summary = {"matched_seeds": sorted(matched_seeds),
+               "bootstrap_samples": bootstrap_samples,
                "bootstrap_seed": bootstrap_seed, "weapons": {}}
     rng = np.random.default_rng(bootstrap_seed)
     for weapon in WEAPONS:

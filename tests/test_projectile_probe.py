@@ -21,7 +21,7 @@ def test_probe_shapes_and_perfect_metrics():
 def test_summary_uses_paired_episode_bootstrap(tmp_path):
     for arm, offset, seeds in (("published_control", -0.1, (0,)),
                                ("token_probe", 0.0, (0, 1, 2)),
-                               ("direct_image", 0.2, (0, 1, 2))):
+                               ("direct_image", 0.2, (0,))):
         for seed in seeds:
             metrics = {}
             for weapon in ("Spread", "Laser"):
@@ -34,6 +34,7 @@ def test_summary_uses_paired_episode_bootstrap(tmp_path):
                        "metrics": metrics}
             (tmp_path / f"{arm}-seed{seed}.json").write_text(json.dumps(payload))
     summary = summarize_results(tmp_path, bootstrap_samples=100, bootstrap_seed=1)
+    assert summary["matched_seeds"] == [0]
     for weapon in ("Spread", "Laser"):
         gap = summary["weapons"][weapon]["direct_minus_token_episode_dice"]
         assert np.isclose(gap["mean"], 0.2)

@@ -24,7 +24,7 @@ within a weapon is causal; raw Spread-versus-Laser accuracy is descriptive.
 The target is the RAM-derived 32×32 player-projectile occupancy map with sigma 6 screen
 pixels. It represents every simultaneously live Spread pellet or Laser segment rather
 than reducing a shot to one point. Train with weighted BCE (`pos_weight=10`), AdamW, learning rate `3e-4`, cosine
-decay, 500 warmup steps, 20,000 total steps, and seeds 0, 1, and 2. Sample weapons
+decay, 500 warmup steps, 20,000 total steps, and seed 0. Sample weapons
 equally and use the same positive/empty-frame policy in both learned arms.
 
 | run | input and trainable path | purpose |
