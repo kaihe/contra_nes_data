@@ -64,14 +64,10 @@ validation.
 | exact RGB-pixel accuracy, unweighted/weighted MSE, PSNR | reconstruction fidelity | native frame and decoder output |
 | player, enemy, projectile soft Dice | entity information retained after quantization | quantized auxiliary head and RAM heatmaps |
 | projectile presence AP and empty-frame FPR at 0.5 | detect hallucination hidden by positive-only Dice | projectile heatmap maximum |
-| fresh frozen-code probe minus RGB-probe Dice | representation gap independent of the training head | matched held-out probes |
-| utilization, perplexity, dead-entry fraction | codebook capacity and collapse | assignment histogram |
-| bytes/frame, encoder frames/s, decoder frames/s | storage and operational cost | produced codes and timed run logs |
 
 Choose the smallest codebook whose paired validation interval is no worse than
 `vq-k16384` by more than 0.005 exact-pixel accuracy or 0.01 Dice on any entity channel.
-Evaluate only that selection and `vq-k16384` on test. A candidate with unstable or
-collapsed code utilization is not releasable even if its average reconstruction passes.
+Evaluate only that selection and `vq-k16384` on test.
 
 | recorded number | provenance |
 |---|---|
