@@ -50,6 +50,8 @@ episodes for 95% confidence intervals.
 |---|---|---|
 | player-bullet soft Dice | primary localization score | predicted and RAM-derived heatmaps |
 | direct-CNN Dice minus fresh-token-probe Dice | primary representation gap | paired validation episodes |
+| bullet-presence average precision and F1 | detect whether any player projectile exists | per-frame predicted heatmap maximum and RAM presence |
+| empty-frame false-positive rate | expose hallucinated projectiles hidden by positive-only Dice | fraction of empty frames with predicted maximum ≥ 0.5 |
 | MSE skill | secondary map-quality diagnostic against an all-zero predictor | same heatmaps |
 | peak hit | secondary strongest-location diagnostic | same heatmaps |
 | positive/empty frames, parameters, frames/s | coverage, capacity, and throughput checks | frozen manifest and run logs |
@@ -73,6 +75,11 @@ supplemental artifacts but excluded because no matching direct-image seeds were 
 
 The paired intervals use 10,000 whole-episode bootstrap samples. Both gaps are
 negative, so neither weapon satisfies the predeclared token-information-loss rule.
+However, localization Dice is computed only on frames containing a ground-truth
+projectile. Visual inspection of the published Laser preview found substantial
+predictions on empty frames—for example maxima 0.45 at action 1099 and 0.63 at action
+1129—so the Dice result alone does not establish reliable bullet presence detection.
+Presence and empty-frame measurements are required before the conclusion is finalized.
 
 | weapon | arm | MSE skill | peak hit |
 |---|---|---:|---:|
