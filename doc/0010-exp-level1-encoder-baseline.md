@@ -113,4 +113,6 @@ Machine-readable metrics are in
 
 ## 4. Conclusion
 
-Awaiting user conclusion.
+There is no evidence that Spread bullets are better encoded than Laser bullets.
+Therefore, encoder quality does not explain why the Spread boss-fight policy wins more
+often than the Laser boss-fight policy.
