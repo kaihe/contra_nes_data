@@ -97,6 +97,47 @@ class FrameEncoder(nn.Module):
         return self.token_ln(self.proj(z.flatten(1)))
 
 
+class HeatmapHead(nn.Module):
+    """Decode four occupancy heatmaps from the single frame token."""
+
+    def __init__(self, dim: int, grid: int, n_classes: int, depth: int,
+                 base: int = 4):
+        super().__init__()
+        n_up = int(round(math.log2(grid / base)))
+        if base * 2 ** n_up != grid:
+            raise ValueError("heatmap grid must be base times a power of two")
+        channels = depth * 2 ** n_up
+        self.base, self.seed_ch = base, channels
+        self.seed = nn.Linear(dim, channels * base * base)
+        layers: list[nn.Module] = []
+        for _ in range(n_up):
+            out = max(depth, channels // 2)
+            layers += [nn.ConvTranspose2d(channels, out, 4, stride=2, padding=1),
+                       _norm(out), nn.SiLU()]
+            channels = out
+        self.ups = nn.Sequential(*layers)
+        self.out = nn.Conv2d(channels, n_classes, 3, padding=1)
+
+    def forward(self, token: torch.Tensor) -> torch.Tensor:
+        value = self.seed(token).view(len(token), self.seed_ch,
+                                      self.base, self.base)
+        return self.out(self.ups(value))
+
+
+class EntityFrameEncoder(FrameEncoder):
+    """Published frame encoder with its training-only entity probe attached."""
+
+    def __init__(self, config: dict[str, Any]):
+        super().__init__(config)
+        self.entity_head = HeatmapHead(
+            dim=int(config["hiddim"]), grid=int(config["aux_size"]),
+            n_classes=int(config["entity_classes"]),
+            depth=int(config["head_depth"]))
+
+    def entity_logits(self, image: torch.Tensor) -> torch.Tensor:
+        return self.entity_head(self.encode(image))
+
+
 def load_encoder(checkpoint: str, *, freeze: bool = True,
                  map_location: str = "cpu") -> FrameEncoder:
     """Load the published encoder's inference path, rejecting unexpected core keys."""
@@ -112,3 +153,14 @@ def load_encoder(checkpoint: str, *, freeze: bool = True,
     if freeze:
         encoder.requires_grad_(False).eval()
     return encoder
+
+
+def load_entity_encoder(checkpoint: str, *, map_location: str = "cpu"
+                        ) -> EntityFrameEncoder:
+    """Load the frozen encoder plus the entity head used for baseline measurement."""
+    payload: dict[str, Any] = torch.load(os.path.expanduser(checkpoint),
+                                         map_location=map_location,
+                                         weights_only=False)
+    encoder = EntityFrameEncoder(payload["config"])
+    encoder.load_state_dict(payload["encoder"], strict=True)
+    return encoder.requires_grad_(False).eval()
