@@ -51,6 +51,15 @@ view must satisfy `observation_count = action_count + 1`. Traces that never ente
 the boss scene or fail alignment are quarantined and replaced from the frozen
 eligible snapshot before the collection manifest is finalized.
 
+`view` is a scalar projection chosen once for a dataset reader, not a request to
+expand each episode into three examples. The reader rejects multiple views in one
+request. In particular, `full` is mutually exclusive with either partial view,
+so a normal training dataset cannot contain the whole episode and its component
+segments at the same time. Separate experiments may intentionally choose
+different views, but their manifests have distinct `(collection, view)` identities.
+If the two partial views are trained separately, their target-action ranges are
+disjoint; only the boundary observation is shared as necessary context.
+
 ## Immutable token-shard members
 
 Physical shards live at:
@@ -100,10 +109,12 @@ collection=l1-full-10k-v1
 view=start_to_boss | boss_fight | full
 ```
 
-It resolves immutable shard paths, verifies hashes, and slices members according
-to the table above. The policy repository may choose any episode subset for
-training or validation, but it reads the same shards in place and does not write
-image-token caches or shard-index JSON files.
+It requires exactly one `view`, resolves immutable shard paths, verifies hashes,
+and slices members according to the table above. The resulting dataset identity
+is `(collection, view, episode subset)`, and the reader never materializes view
+files. The policy repository may choose any episode subset for training or
+validation, but it reads the same shards in place and does not write image-token
+caches or shard-index JSON files.
 
 ## Publication gates and recovery
 
