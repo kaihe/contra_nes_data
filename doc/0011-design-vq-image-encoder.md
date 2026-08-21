@@ -67,9 +67,11 @@ mean or break dataset reproducibility.
 ## A quantized multi-task objective protects gameplay details
 
 Classic uniform L2 is dominated by static background pixels. Build a fixed weight mask
-from the RAM-derived ground-truth entity heatmaps, with the largest weights on player
-and enemy projectiles. The model cannot alter this mask. For target frame `x`, decoded
-frame `x_hat`, heatmap channels `H_c`, and versioned class weights `alpha_c`:
+from three RAM-derived ground-truth heatmaps: player, enemy, and projectile. The
+projectile channel merges every weapon and ownership into one visually observable
+class and receives the largest weight. The model cannot alter this mask. For target
+frame `x`, decoded frame `x_hat`, heatmap channels `H_c`, and versioned class weights
+`alpha_c`:
 
 ```text
 W = clip(1 + sum_c alpha_c H_c, 1, W_max)
@@ -81,29 +83,24 @@ heatmap boundary also rewards reconstruction immediately around an entity. Repor
 entity and background pixel errors separately so a high entity weight cannot silently
 destroy the rest of the frame.
 
-Two training-only auxiliary heads read exclusively from the quantized four-code
-representation—not from pre-quantization encoder features:
-
-- An entity head predicts player, enemy, player-projectile, and enemy-projectile
-  heatmaps using weighted BCE plus soft Dice. Empty projectile frames remain in the
-  loss to penalize hallucinations found in experiment 0010.
-- A player-projectile classifier predicts `none`, `regular`, `spread`, `laser`, or
-  `flamethrower`. Sampling is balanced by class, and its labels come from replay RAM
-  plus trace weapon metadata. Typed projectile heatmap channels verify that the
-  classifier is not succeeding only from the HUD or background.
+A single training-only head reads exclusively from the quantized four-code
+representation—not from pre-quantization encoder features—and predicts the same three
+heatmaps with weighted BCE plus soft Dice. Independent sigmoid channels allow entities
+to overlap. Empty projectile frames remain in the loss to penalize hallucinations found
+in experiment 0010. There is no projectile ownership or weapon-type target; the
+temporal policy must infer any distinction supported by motion and game context.
 
 The complete objective is:
 
 ```text
-L = L_VQ + lambda_pixel L_pixel + lambda_edge L_edge
-    + lambda_entity (L_BCE + L_Dice) + lambda_type L_CE
+L = L_VQ + lambda_pixel L_pixel
+    + lambda_entity (L_BCE + L_Dice)
 ```
 
-`L_VQ` contains the codebook and commitment terms. `L_edge` preserves sharp sprite
-boundaries. Loss weights are recorded in the encoder identity and selected by an
-ablation from uniform L2, then mask, entity head, and projectile classifier; each added
-term must improve held-out entity detail without materially degrading background
-reconstruction or codebook utilization.
+`L_VQ` contains the mandatory codebook and commitment terms. Loss weights are recorded
+in the encoder identity and selected by an ablation from uniform L2, then weighted L2,
+then the three-channel heatmap head. Each added term must improve held-out entity detail
+without materially degrading background reconstruction or codebook utilization.
 
 The four-code bottleneck carries only 64 stored bits per frame and cannot be declared
 equivalent to arbitrary raw RGB by construction. Contra frames occupy a much smaller
