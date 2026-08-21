@@ -69,9 +69,20 @@ mean or break dataset reproducibility.
 Classic uniform L2 is dominated by static background pixels. Build a fixed weight mask
 from three RAM-derived ground-truth heatmaps: player, enemy, and projectile. The
 projectile channel merges every weapon and ownership into one visually observable
-class and receives the largest weight. The model cannot alter this mask. For target
-frame `x`, decoded frame `x_hat`, heatmap channels `H_c`, and versioned class weights
-`alpha_c`:
+class and receives the largest weight. No sprite mask or bounding box is required.
+Place a Gaussian at each RAM-derived entity center and combine entities in the same
+channel by maximum rather than sum, preventing overlapping projectiles from exploding
+the weight:
+
+```text
+H_c(p) = max_i exp(-||p - center_i||² / (2 sigma_c²))
+```
+
+The initial native-screen-pixel configuration is `sigma=6` for player and enemy,
+`sigma=4` for projectiles, class weights `(3, 3, 15)`, and `W_max=16`. Scale sigma with
+any image resize. These values are versioned with the encoder and remain ablation
+parameters rather than hidden constants. The model cannot alter the masks. For target
+frame `x` and decoded frame `x_hat`:
 
 ```text
 W = clip(1 + sum_c alpha_c H_c, 1, W_max)
