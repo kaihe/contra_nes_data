@@ -1,6 +1,6 @@
 # Encode 10k full Level 1 traces once and expose three sequence views
 
-Status: Proposed
+Status: Accepted
 
 **Question.** How should the data repository turn 10,000 full Level 1 traces in
 GCS into policy-ready shards with precomputed image tokens, while allowing an
