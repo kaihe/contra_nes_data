@@ -5,5 +5,7 @@
 - [0006 Cloud trace worker bootstrap](0006-design-cloud-trace-worker.md) — Implemented — safe minimal Ubuntu provisioning for MC search
 - [0007 Distributed trace ingest](0007-design-distributed-trace-ingest.md) — Accepted — immutable cloud batches with single-writer ingestion
 - [0008 Level 1 full 10k](0008-design-level1-full-10k.md) — Accepted — one full encoding with three virtual sequence views
+- [0010 Spread/Laser projectile visibility](0010-exp-level1-encoder-baseline.md) — Implemented — no evidence encoder quality explains the weapon win-rate gap
+- [0011 Four-code VQ image encoder](0011-design-vq-image-encoder.md) — Proposed — four offline spatial codes enter GPT as four positions per frame
 - [Entities](ENTITIES.md) — Legacy — RAM entity taxonomy and extraction notes
 - [Events](EVENTS.md) — Legacy — event semantics and trace statistics
