@@ -11,9 +11,11 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import threading
 import time
 from concurrent.futures import ProcessPoolExecutor
 import multiprocessing
+import queue
 from pathlib import Path
 
 import cv2
@@ -289,41 +291,78 @@ def build(snapshot_path: str, *, house_dir: str, encoder_path: str,
         raise RuntimeError("CUDA was requested but torch cannot access it")
     if stage_workers < 1:
         raise ValueError("stage_workers must be positive")
-    encoder = load_encoder(encoder_path).to(device).eval()
     db = connect(house / "catalog.sqlite")
     existing = {row[0] for row in db.execute("SELECT fingerprint FROM shard_episodes")}
     selected = [row for row in selected if row["fingerprint"] not in existing]
     ordinal = int(db.execute(
         "SELECT COALESCE(MAX(ordinal),-1)+1 FROM shards WHERE level=1 AND task='full' "
         "AND weapon='mixed' AND encoder_sha256=?", (spec.checkpoint_sha256,)).fetchone()[0])
+    db.close()
     stage = Path(stage_root)
     stage.mkdir(parents=True, exist_ok=True)
-    pending, pending_frames = [], 0
+    # Staging is a disposable journal between replay and publication. Anything
+    # left by an interrupted producer has no catalog visibility and is replayed.
+    for stale in stage.glob("*.stage.npz"):
+        stale.unlink()
 
-    def publish_pending() -> None:
-        nonlocal ordinal, pending, pending_frames
-        if not pending:
-            return
-        destination = house / "level1/full/mixed" / f"token-{ordinal:05d}.tar"
-        result = _publish(pending, destination, encoder=encoder, device=device,
-                          chunk=chunk, encoder_sha256=spec.checkpoint_sha256)
-        records = result["records"]
-        register_shard(db, Shard(
-            path=os.path.relpath(destination, house), sha256=result["sha256"],
-            level=1, task="full", weapon="mixed", encoder_sha256=spec.checkpoint_sha256,
-            ordinal=ordinal, episodes=len(records), frames=result["observations"]),
-            [(r["trace_fingerprint"], r["uid"], r["source_gcs_uri"],
-              r["action_steps"]) for r in records])
-        register_boundaries(db, [(r["trace_fingerprint"], r["observation_steps"],
-                                  r["boss_observation_index"], r["source_gcs_uri"],
-                                  r["source_sha256"]) for r in records])
-        for path in pending:
-            path.unlink()
-        print(f"published {destination.name}: {len(records)} episodes, "
-              f"{result['observations']} observations, {result['bytes']/2**30:.2f} GiB",
-              flush=True)
-        ordinal += 1
-        pending, pending_frames = [], 0
+    ready: queue.Queue[tuple[Path, dict] | None] = queue.Queue(maxsize=200)
+    consumer_errors: list[BaseException] = []
+
+    def consume_ready() -> None:
+        next_ordinal = ordinal
+        pending: list[Path] = []
+        pending_frames = 0
+        encoder = None
+        writer = connect(house / "catalog.sqlite")
+
+        def publish_pending() -> None:
+            nonlocal next_ordinal, pending, pending_frames, encoder
+            if not pending:
+                return
+            if encoder is None:
+                encoder = load_encoder(encoder_path).to(device).eval()
+            destination = house / "level1/full/mixed" / f"token-{next_ordinal:05d}.tar"
+            result = _publish(pending, destination, encoder=encoder, device=device,
+                              chunk=chunk, encoder_sha256=spec.checkpoint_sha256)
+            records = result["records"]
+            register_shard(writer, Shard(
+                path=os.path.relpath(destination, house), sha256=result["sha256"],
+                level=1, task="full", weapon="mixed",
+                encoder_sha256=spec.checkpoint_sha256, ordinal=next_ordinal,
+                episodes=len(records), frames=result["observations"]),
+                [(r["trace_fingerprint"], r["uid"], r["source_gcs_uri"],
+                  r["action_steps"]) for r in records])
+            register_boundaries(writer, [
+                (r["trace_fingerprint"], r["observation_steps"],
+                 r["boss_observation_index"], r["source_gcs_uri"], r["source_sha256"])
+                for r in records])
+            for path in pending:
+                path.unlink()
+            print(f"published {destination.name}: {len(records)} episodes, "
+                  f"{result['observations']} observations, "
+                  f"{result['bytes']/2**30:.2f} GiB", flush=True)
+            next_ordinal += 1
+            pending, pending_frames = [], 0
+
+        try:
+            while True:
+                item = ready.get()
+                if item is None:
+                    publish_pending()
+                    return
+                path, meta = item
+                pending.append(path)
+                pending_frames += meta["observation_steps"]
+                if pending_frames >= target_frames:
+                    publish_pending()
+        except BaseException as exc:
+            consumer_errors.append(exc)
+        finally:
+            writer.close()
+
+    consumer = threading.Thread(target=consume_ready, name="cuda-token-consumer",
+                                daemon=True)
+    consumer.start()
 
     executor = None
     if stage_workers > 1:
@@ -360,17 +399,18 @@ def build(snapshot_path: str, *, house_dir: str, encoder_path: str,
                     results = executor.map(_stage_worker, jobs, chunksize=1)
                 for staged_name, meta in results:
                     staged_path = Path(staged_name)
-                    pending.append(staged_path)
-                    pending_frames += meta["observation_steps"]
-                    if pending_frames >= target_frames:
-                        publish_pending()
-        publish_pending()
+                    if consumer_errors:
+                        raise RuntimeError("CUDA token consumer failed") from consumer_errors[0]
+                    ready.put((staged_path, meta))
+        ready.put(None)
+        consumer.join()
+        if consumer_errors:
+            raise RuntimeError("CUDA token consumer failed") from consumer_errors[0]
     finally:
         if env is not None:
             env.close()
         if executor is not None:
             executor.shutdown(cancel_futures=True)
-        db.close()
 
     if limit is None:
         db = connect(house / "catalog.sqlite")
