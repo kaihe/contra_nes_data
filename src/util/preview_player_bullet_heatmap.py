@@ -14,7 +14,9 @@ import numpy as np
 import torch
 
 from datahouse.encoder import EncoderSpec, load_entity_encoder
+from datahouse.encoder_baseline import ENTITY_SIGMA_CELLS
 from datahouse.full_level import _download_archive, _extract_selected
+from env.entity import entity_heatmaps
 from env.utility import boss_scene
 from util.replay import make_env, rewind_state, step_env
 
@@ -36,7 +38,8 @@ def select_traces(snapshot: dict) -> dict[str, dict]:
     return chosen
 
 
-def replay_boss_samples(source: Path, *, every: int = 10) -> tuple[list[int], np.ndarray]:
+def replay_boss_samples(source: Path, *, every: int = 10
+                        ) -> tuple[list[int], np.ndarray, np.ndarray]:
     """Replay and capture the boss boundary plus every N subsequent decisions."""
     with np.load(source, allow_pickle=False) as trace:
         actions = np.asarray(trace["actions"], dtype=np.uint8)
@@ -44,13 +47,15 @@ def replay_boss_samples(source: Path, *, every: int = 10) -> tuple[list[int], np
         skip = int(trace["skip"]) if "skip" in trace else 4
     env = make_env()
     rewind_state(env, state)
-    steps, frames = [], []
+    steps, frames, targets = [], [], []
     boundary = None
     try:
         if boss_scene(env.unwrapped.get_ram()):
             boundary = 0
             steps.append(0)
             frames.append(env.em.get_screen().copy())
+            targets.append(entity_heatmaps(env.unwrapped.get_ram(), grid=32,
+                                           sigma=ENTITY_SIGMA_CELLS)[PLAYER_BULLET_CHANNEL])
         for observation_index, action in enumerate(actions, 1):
             step_env(env, action, skip)
             if boundary is None and boss_scene(env.unwrapped.get_ram()):
@@ -58,11 +63,15 @@ def replay_boss_samples(source: Path, *, every: int = 10) -> tuple[list[int], np
             if boundary is not None and (observation_index - boundary) % every == 0:
                 steps.append(observation_index)
                 frames.append(env.em.get_screen().copy())
+                targets.append(entity_heatmaps(
+                    env.unwrapped.get_ram(), grid=32,
+                    sigma=ENTITY_SIGMA_CELLS)[PLAYER_BULLET_CHANNEL])
     finally:
         env.close()
     if boundary is None:
         raise ValueError(f"trace never entered the boss scene: {source}")
-    return steps, np.asarray(frames, dtype=np.uint8)
+    return (steps, np.asarray(frames, dtype=np.uint8),
+            np.asarray(targets, dtype=np.float32))
 
 
 def predict(model, frames: np.ndarray, *, image_size: int, device: str,
@@ -89,17 +98,23 @@ def overlay(frame: np.ndarray, heatmap: np.ndarray) -> np.ndarray:
 
 
 def save_sheet(weapon: str, fingerprint: str, steps: list[int], frames: np.ndarray,
-               heatmaps: np.ndarray, destination: Path, *, columns: int = 5) -> None:
+               heatmaps: np.ndarray, targets: np.ndarray, destination: Path, *,
+               columns: int = 4) -> None:
     rows = math.ceil(len(frames) / columns)
-    figure, axes = plt.subplots(rows, columns, figsize=(3 * columns, 2.7 * rows),
+    figure, axes = plt.subplots(rows, columns, figsize=(4 * columns, 2.5 * rows),
                                 squeeze=False)
     for axis in axes.flat:
         axis.axis("off")
-    for axis, step, frame, heatmap in zip(axes.flat, steps, frames, heatmaps):
-        axis.imshow(overlay(frame, heatmap))
+    for axis, step, frame, heatmap, target in zip(
+            axes.flat, steps, frames, heatmaps, targets):
+        comparison = np.concatenate([overlay(frame, heatmap),
+                                     overlay(frame, target)], axis=1)
+        axis.imshow(comparison)
         peak = np.unravel_index(np.argmax(heatmap), heatmap.shape)
-        axis.set_title(f"action {step} · max {heatmap.max():.2f}\n"
-                       f"peak cell ({peak[1]},{peak[0]})", fontsize=8)
+        axis.set_title(f"action {step} · pred max {heatmap.max():.2f} · "
+                       f"GT max {target.max():.0f}\n"
+                       f"prediction ←  |  → ground truth · peak ({peak[1]},{peak[0]})",
+                       fontsize=8)
         axis.axis("off")
     figure.suptitle(f"{weapon} boss · predicted player-bullet heatmap · "
                     f"trace {fingerprint[:12]}", fontsize=12)
@@ -127,10 +142,11 @@ def render(snapshot_path: str, checkpoint: str, output_dir: str, *, every: int =
             archive = temporary / "traces.tar.zst"
             _download_archive(client, batch, archive)
             source = _extract_selected(archive, [row], temporary)[0]
-            steps, frames = replay_boss_samples(source, every=every)
+            steps, frames, targets = replay_boss_samples(source, every=every)
             heatmaps = predict(model, frames, image_size=spec.image_size, device=device)
         destination = Path(output_dir) / f"{weapon.lower()}-player-bullets.png"
-        save_sheet(weapon, row["fingerprint"], steps, frames, heatmaps, destination)
+        save_sheet(weapon, row["fingerprint"], steps, frames, heatmaps, targets,
+                   destination)
         outputs.append(destination)
         print(f"{weapon}: {len(frames)} samples -> {destination}", flush=True)
     return outputs
