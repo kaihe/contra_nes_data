@@ -64,13 +64,46 @@ and slot embeddings; the datahouse decoder retains a separate immutable embeddin
 for reconstruction. Policy learning therefore cannot change what stored code indices
 mean or break dataset reproducibility.
 
-## Detail-preserving training targets native game structure
+## A quantized multi-task objective protects gameplay details
 
-The VQ model reconstructs the native NES frame rather than a blurred natural-image
-proxy. Training combines palette-aware pixel reconstruction with edge/high-frequency
-loss and the existing RAM-derived entity heatmaps. Entity supervision includes the
-player, enemies, player projectiles, and enemy projectiles so a low average pixel loss
-cannot hide missing one-pixel gameplay details.
+Classic uniform L2 is dominated by static background pixels. Build a fixed weight mask
+from the RAM-derived ground-truth entity heatmaps, with the largest weights on player
+and enemy projectiles. The model cannot alter this mask. For target frame `x`, decoded
+frame `x_hat`, heatmap channels `H_c`, and versioned class weights `alpha_c`:
+
+```text
+W = clip(1 + sum_c alpha_c H_c, 1, W_max)
+L_pixel = sum(W * ||x - x_hat||²) / sum(W)
+```
+
+The base weight of one retains supervision on terrain and backgrounds, while the soft
+heatmap boundary also rewards reconstruction immediately around an entity. Report
+entity and background pixel errors separately so a high entity weight cannot silently
+destroy the rest of the frame.
+
+Two training-only auxiliary heads read exclusively from the quantized four-code
+representation—not from pre-quantization encoder features:
+
+- An entity head predicts player, enemy, player-projectile, and enemy-projectile
+  heatmaps using weighted BCE plus soft Dice. Empty projectile frames remain in the
+  loss to penalize hallucinations found in experiment 0010.
+- A player-projectile classifier predicts `none`, `regular`, `spread`, `laser`, or
+  `flamethrower`. Sampling is balanced by class, and its labels come from replay RAM
+  plus trace weapon metadata. Typed projectile heatmap channels verify that the
+  classifier is not succeeding only from the HUD or background.
+
+The complete objective is:
+
+```text
+L = L_VQ + lambda_pixel L_pixel + lambda_edge L_edge
+    + lambda_entity (L_BCE + L_Dice) + lambda_type L_CE
+```
+
+`L_VQ` contains the codebook and commitment terms. `L_edge` preserves sharp sprite
+boundaries. Loss weights are recorded in the encoder identity and selected by an
+ablation from uniform L2, then mask, entity head, and projectile classifier; each added
+term must improve held-out entity detail without materially degrading background
+reconstruction or codebook utilization.
 
 The four-code bottleneck carries only 64 stored bits per frame and cannot be declared
 equivalent to arbitrary raw RGB by construction. Contra frames occupy a much smaller
