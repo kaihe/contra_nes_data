@@ -401,6 +401,69 @@ def train(data_dir: str, output_dir: str, *, arm: str, seed: int, steps: int = 2
     return result
 
 
+def summarize_results(results_dir: str, *, bootstrap_samples: int = 10_000,
+                      bootstrap_seed: int = 0) -> dict:
+    """Aggregate three-seed metrics and paired episode-bootstrap Dice gaps."""
+    root = Path(results_dir)
+    runs = {}
+    for arm in ("published_control", "token_probe", "direct_image"):
+        paths = sorted(root.glob(f"{arm}-seed*.json"))
+        if not paths:
+            raise RuntimeError(f"no completed results for {arm}")
+        runs[arm] = [json.loads(path.read_text()) for path in paths]
+    expected_seeds = {0, 1, 2}
+    for arm in ("token_probe", "direct_image"):
+        seeds = {int(run["seed"]) for run in runs[arm]}
+        if seeds != expected_seeds:
+            raise RuntimeError(f"{arm}: expected seeds {expected_seeds}, found {seeds}")
+
+    summary = {"bootstrap_samples": bootstrap_samples,
+               "bootstrap_seed": bootstrap_seed, "weapons": {}}
+    rng = np.random.default_rng(bootstrap_seed)
+    for weapon in WEAPONS:
+        weapon_summary = {"arms": {}}
+        for arm, arm_runs in runs.items():
+            metrics = {}
+            for metric in ("dice", "mse_skill", "peak_hit", "elapsed_s"):
+                values = np.asarray([
+                    run["elapsed_s"] if metric == "elapsed_s"
+                    else run["metrics"][weapon][metric]
+                    for run in arm_runs], dtype=np.float64)
+                metrics[metric] = {
+                    "mean": float(values.mean()),
+                    "std": float(values.std(ddof=1)) if len(values) > 1 else 0.0,
+                    "values": values.tolist(),
+                }
+            weapon_summary["arms"][arm] = metrics
+
+        episode_ids = set(runs["token_probe"][0]["metrics"][weapon]["episode_dice"])
+        for arm in ("token_probe", "direct_image"):
+            for run in runs[arm]:
+                if set(run["metrics"][weapon]["episode_dice"]) != episode_ids:
+                    raise RuntimeError(f"{weapon}: validation episode mismatch in {arm}")
+        episode_ids = sorted(episode_ids, key=int)
+        per_episode = {}
+        for arm in ("token_probe", "direct_image"):
+            per_episode[arm] = np.asarray([
+                np.mean([run["metrics"][weapon]["episode_dice"][episode_id]
+                         for run in runs[arm]])
+                for episode_id in episode_ids], dtype=np.float64)
+        paired = per_episode["direct_image"] - per_episode["token_probe"]
+        draws = rng.integers(0, len(paired), size=(bootstrap_samples, len(paired)))
+        bootstrap = paired[draws].mean(axis=1)
+        weapon_summary["direct_minus_token_episode_dice"] = {
+            "mean": float(paired.mean()),
+            "ci95": [float(value) for value in np.quantile(bootstrap, [0.025, 0.975])],
+            "episodes": len(paired),
+            "method": "paired episode bootstrap after averaging each episode over seeds",
+        }
+        summary["weapons"][weapon] = weapon_summary
+    destination = root / "summary.json"
+    destination.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+    print(json.dumps(summary, indent=2, sort_keys=True), flush=True)
+    return summary
+
+
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -415,13 +478,21 @@ def main(argv=None) -> None:
     run.add_argument("--arm", choices=("published_control", "token_probe", "direct_image"), required=True)
     run.add_argument("--seed", type=int, default=0); run.add_argument("--steps", type=int, default=20_000)
     run.add_argument("--batch", type=int, default=64); run.add_argument("--device", default="cuda")
+    summarize = sub.add_parser("summarize")
+    summarize.add_argument("--results-dir", required=True)
+    summarize.add_argument("--bootstrap-samples", type=int, default=10_000)
+    summarize.add_argument("--bootstrap-seed", type=int, default=0)
     args = parser.parse_args(argv)
     if args.command == "freeze": freeze_snapshot(args.gcs_root, args.output)
     elif args.command == "materialize":
         materialize(args.snapshot, args.checkpoint, args.output_dir, workers=args.workers,
                     limit_per_weapon=args.limit_per_weapon, device=args.device)
-    else: train(args.data_dir, args.output_dir, arm=args.arm, seed=args.seed,
-                steps=args.steps, batch=args.batch, device=args.device)
+    elif args.command == "train":
+        train(args.data_dir, args.output_dir, arm=args.arm, seed=args.seed,
+              steps=args.steps, batch=args.batch, device=args.device)
+    else:
+        summarize_results(args.results_dir, bootstrap_samples=args.bootstrap_samples,
+                          bootstrap_seed=args.bootstrap_seed)
 
 
 if __name__ == "__main__":
