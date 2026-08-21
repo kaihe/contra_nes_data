@@ -13,21 +13,19 @@ candidate; it does not approve policy adoption without a later closed-loop compa
 ## 2. Setup
 
 Freeze the existing `l1-full-10k-v1` snapshot (10,000 complete Level 1 episodes;
-snapshot SHA-256 `14cf8463…bf85be8a`). Sort a salted hash of each trace fingerprint and
-assign 8,000 episodes to train, 1,000 to validation, and 1,000 to test. Frames from one
-episode never cross splits.
+snapshot SHA-256 `14cf8463…bf85be8a`). Sort a salted hash of each trace fingerprint,
+retain the first 1,000 episodes, and assign 800 episodes to train, 100 to validation,
+and 100 to test. Frames from one episode never cross splits. The smaller episode set
+removes near-duplicate complete playthroughs while retaining every temporal transition.
 
-Replay each trace at the emulator's native 224×240 RGB resolution without resize or
-interpolation. Divide its action range into 100 equal temporal intervals and select one
-step uniformly at random from each interval. Derive the random seed from the trace
-fingerprint and experiment seed, making the selection reproducible while varying the
-start inside every interval. A trace shorter than 100 distinct frames contributes every
-frame once. Record trace fingerprint, action index, frame hash, split, and RAM-derived
-player, enemy, and merged-projectile centers in a frozen sample manifest.
+Replay each selected trace at the emulator's native 224×240 RGB resolution without
+resize or interpolation and retain every observation, including the initial frame.
+Record trace fingerprint, action index, frame hash, split, and RAM-derived player,
+enemy, and merged-projectile centers in a frozen sample manifest.
 
-The expected corpus is 800,000 train, 100,000 validation, and 100,000 test frames.
+The exact corpus is 1,196,977 frames; split totals are recorded after replay.
 Store it only as a disposable cache under `tmp/0012-vq-codebook/`: lossless native PNGs
-in sequential tar files of 10,000 samples plus compact center/offset arrays. Generate
+in sequential ten-episode tar files plus compact center/offset arrays. Generate
 Gaussian masks in the loader. A 200-frame native replay sample averaged 8.6 KB per PNG,
 so the image payload is expected to be about 8.6 GB. All four runs consume the same
 cache; final policy shards contain no PNGs.
@@ -71,7 +69,7 @@ Evaluate only that selection and `vq-k16384` on test.
 
 | recorded number | provenance |
 |---|---|
-| 10,000 episodes and snapshot hash | `game_trace/datahouse/collections/l1-full-10k-v1.json` |
+| 1,000 episodes, 1,196,977 frames, and snapshot hash | salted selection from `game_trace/datahouse/collections/l1-full-10k-v1.json` |
 | native 224×240 shape and 8.6 KB PNG mean | 200 frames replayed from `win_level1_20260819231221_i512.npz` |
 | four spatial codes and Gaussian objective | `doc/0011-design-vq-image-encoder.md` |
 | split, sample, optimizer, and codebook values | predeclared 0012 setup above |
