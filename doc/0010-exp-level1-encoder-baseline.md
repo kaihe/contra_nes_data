@@ -1,32 +1,58 @@
-# Level 1 full-trace encoder baseline
+# Does one image token preserve player-projectile localization?
 
 Status: Proposed
 
 ## 1. Goal
 
-Measure how well the frozen datahouse encoder preserves Level 1 entity locations on
-the new full-trace distribution before deciding whether to retrain it on that data.
-The checkpoint passes only if its enemy and enemy-bullet soft Dice meet the existing
-0.96 and 0.91 gates.
+Test whether compressing a game image into the frozen 512-D datahouse token removes
+player-projectile detail needed for Laser control. Compare a freshly trained heatmap
+probe over frozen tokens with a CNN that predicts the same heatmap directly from RGB.
+Make the decision separately for Spread and Laser on balanced boss-fight data.
 
 ## 2. Setup
 
-Evaluate checkpoint `f36041bc…1923c` without training. Use the 1,000 largest
-fingerprints in the frozen `l1-full-10k-v1` collection as a deterministic validation
-set; reserve the other 9,000 episodes for a later training arm. Replay the immutable
-GCS NPZ sources, resize RGB observations to 256×256, derive four 32×32 occupancy
-heatmaps from emulator RAM with sigma 6 px, and evaluate every aligned observation.
-Save the resolved collection, checkpoint, code revision, and aggregate counts under
-`runs/encoder-baseline/l1-full-10k-v1/`.
+Freeze 1,000 unique non-rapid Spread and 1,000 unique non-rapid Laser traces from the
+committed canonical GCS boss prefixes. Select the smallest fingerprints per weapon,
+then assign the first 800 to training and last 200 to validation. Record every source
+object generation and fingerprint in `l1-boss-projectile-probe-v1.json`. Boss-only
+traces make the manifest weapon valid for every frame. Both weapons receive identical
+episode counts, frame sampling, optimizer steps, seeds, and validation exposure.
+
+The target is the RAM-derived 32×32 player-bullet occupancy map with sigma 6 screen
+pixels. Train with weighted BCE (`pos_weight=10`), AdamW, learning rate `3e-4`, cosine
+decay, 500 warmup steps, 20,000 total steps, and seeds 0, 1, and 2. Sample weapons
+equally and use the same positive/empty-frame policy in both learned arms.
+
+| run | input and trainable path | purpose |
+|---|---|---|
+| published control | frozen encoder `f36041bc…1923c` plus its published entity head | measure current behavior without fitting on the new snapshot |
+| fresh token probe | frozen 512-D token plus a newly initialized player-bullet heatmap head | measure information recoverable from the production token |
+| direct-image CNN | RGB image through a fully convolutional encoder-decoder with no vector bottleneck | measure projectile information available directly from pixels |
+
+The completed full-trace control remains a distribution check: on 1,000 held-out
+episodes it measured player-bullet Dice 0.6734, MSE skill 0.2889, and peak hit 0.7522
+over 726,799 positive observations. It is not compared numerically with the balanced
+boss snapshot because its episode distribution differs.
 
 ## 3. Evaluation metrics
 
+Report every metric separately for the 200 Spread and 200 Laser validation episodes.
+Aggregate by frame for continuity with the encoder baseline and bootstrap whole
+episodes for 95% confidence intervals.
+
 | metric | role | source |
 |---|---|---|
-| soft Dice per entity class | primary; enemy ≥0.96 and enemy-bullet ≥0.91 are gates | replayed RGB and RAM-derived heatmaps |
-| MSE skill per entity class | secondary diagnostic against the all-zero predictor | same fixed validation observations |
-| peak hit per entity class | secondary diagnostic for strongest-location accuracy | same fixed validation observations |
-| evaluated observations and episodes | coverage and alignment check | frozen collection manifest and evaluator output |
+| player-bullet soft Dice | primary localization score | predicted and RAM-derived heatmaps |
+| direct-CNN Dice minus fresh-token-probe Dice | primary representation gap | paired validation episodes |
+| MSE skill | secondary map-quality diagnostic against an all-zero predictor | same heatmaps |
+| peak hit | secondary strongest-location diagnostic | same heatmaps |
+| positive/empty frames, parameters, frames/s | coverage, capacity, and throughput checks | frozen manifest and run logs |
+
+A weapon has evidence of token information loss when the direct-image CNN improves
+Dice by at least 0.05 and the episode-bootstrap 95% interval for the paired difference
+stays above zero. A larger Laser gap than Spread localizes the concern to Laser visual
+detail. If the published head trails the fresh token probe, head training—not token
+capacity—explains that portion of the deficit.
 
 ## 4. Conclusion
 
