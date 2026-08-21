@@ -79,7 +79,21 @@ However, localization Dice is computed only on frames containing a ground-truth
 projectile. Visual inspection of the published Laser preview found substantial
 predictions on empty frames—for example maxima 0.45 at action 1099 and 0.63 at action
 1129—so the Dice result alone does not establish reliable bullet presence detection.
-Presence and empty-frame measurements are required before the conclusion is finalized.
+
+| weapon | arm | presence AP | precision | recall | F1 | empty-frame FPR |
+|---|---|---:|---:|---:|---:|---:|
+| Spread | published control | 0.9761 | 0.9108 | 0.9735 | 0.9411 | 0.6325 |
+| Spread | fresh token probe | 0.9986 | 0.9907 | 0.9738 | 0.9821 | 0.0608 |
+| Spread | direct-image CNN | 0.9977 | 0.9839 | 0.9733 | 0.9786 | 0.1055 |
+| Laser | published control | 0.9593 | 0.9148 | 0.9454 | 0.9299 | 0.3759 |
+| Laser | fresh token probe | 0.9896 | 0.9212 | 0.9652 | 0.9427 | 0.3527 |
+| Laser | direct-image CNN | 0.9906 | 0.9463 | 0.9264 | 0.9362 | 0.2245 |
+
+Presence uses each frame's predicted heatmap maximum; precision, recall, F1, and
+empty-frame FPR use the fixed 0.5 threshold, while AP is threshold-free. The fresh
+head sharply reduces Spread hallucinations but barely changes the Laser empty-frame
+FPR. Its high Laser AP shows useful ranking information remains, so the fixed-threshold
+failure may include calibration rather than proving token information loss.
 
 | weapon | arm | MSE skill | peak hit |
 |---|---|---:|---:|

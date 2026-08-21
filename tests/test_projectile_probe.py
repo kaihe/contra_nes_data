@@ -2,8 +2,8 @@ import json
 import numpy as np
 import torch
 
-from datahouse.projectile_probe import (DirectImageCNN, TokenProbe, _metric_rows,
-                                        summarize_results)
+from datahouse.projectile_probe import (DirectImageCNN, TokenProbe, _average_precision,
+                                        _metric_rows, summarize_results)
 
 
 def test_probe_shapes_and_perfect_metrics():
@@ -16,6 +16,12 @@ def test_probe_shapes_and_perfect_metrics():
     assert np.allclose(rows["dice"], 1)
     assert np.allclose(rows["mse_skill"], 1)
     assert np.allclose(rows["peak_hit"], 1)
+
+
+def test_presence_average_precision():
+    present = np.asarray([True, False, True, False])
+    scores = np.asarray([0.9, 0.8, 0.7, 0.1])
+    assert np.isclose(_average_precision(present, scores), (1 + 2 / 3) / 2)
 
 
 def test_summary_uses_paired_episode_bootstrap(tmp_path):

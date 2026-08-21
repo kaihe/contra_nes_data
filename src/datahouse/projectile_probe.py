@@ -287,9 +287,22 @@ def _metric_rows(logits: torch.Tensor, target: torch.Tensor) -> dict[str, np.nda
     base = (truth ** 2).flatten(1).mean(-1).clamp_min(1e-9)
     peak = pred.flatten(1).argmax(-1)
     hit = truth.flatten(1).gather(1, peak[:, None]).squeeze(1) > 0.5
-    return {"present": present.cpu().numpy(), "dice": (numerator / denominator).cpu().numpy(),
+    peak_score = pred.flatten(1).max(-1).values
+    return {"present": present.cpu().numpy(),
+            "presence_score": peak_score.cpu().numpy(),
+            "dice": (numerator / denominator).cpu().numpy(),
             "mse_skill": (1 - mse / base).cpu().numpy(),
             "peak_hit": hit.float().cpu().numpy()}
+
+
+def _average_precision(present: np.ndarray, score: np.ndarray) -> float:
+    order = np.argsort(-score, kind="stable")
+    ranked = present[order].astype(np.float64)
+    positives = ranked.sum()
+    if positives == 0:
+        return float("nan")
+    precision = np.cumsum(ranked) / np.arange(1, len(ranked) + 1)
+    return float((precision * ranked).sum() / positives)
 
 
 def _training_buckets(targets, weapon, split) -> list[np.ndarray]:
@@ -319,7 +332,8 @@ def evaluate_model(model, arm: str, arrays: dict, device: str, batch: int = 256)
     for weapon_index, weapon_name in enumerate(WEAPONS):
         indices = np.flatnonzero((arrays["split"] == 1) &
                                  (arrays["weapon"] == weapon_index))
-        values = {key: [] for key in ("present", "dice", "mse_skill", "peak_hit")}
+        values = {key: [] for key in
+                  ("present", "presence_score", "dice", "mse_skill", "peak_hit")}
         episode_values = {}
         for start in range(0, len(indices), batch):
             chosen = indices[start:start + batch]
@@ -340,6 +354,13 @@ def evaluate_model(model, arm: str, arrays: dict, device: str, batch: int = 256)
             for key in values: values[key].append(rows[key])
         merged = {key: np.concatenate(parts) for key, parts in values.items()}
         present = merged["present"]
+        detected = merged["presence_score"] >= 0.5
+        true_positive = int((detected & present).sum())
+        false_positive = int((detected & ~present).sum())
+        false_negative = int((~detected & present).sum())
+        precision = true_positive / max(1, true_positive + false_positive)
+        recall = true_positive / max(1, true_positive + false_negative)
+        empty_scores = merged["presence_score"][~present]
         ep = np.asarray(arrays["episode"][indices])
         for episode_id in np.unique(ep[present]):
             mask = present & (ep == episode_id)
@@ -349,6 +370,14 @@ def evaluate_model(model, arm: str, arrays: dict, device: str, batch: int = 256)
             "dice": float(merged["dice"][present].mean()),
             "mse_skill": float(merged["mse_skill"][present].mean()),
             "peak_hit": float(merged["peak_hit"][present].mean()),
+            "presence_average_precision": _average_precision(
+                present, merged["presence_score"]),
+            "presence_precision": precision, "presence_recall": recall,
+            "presence_f1": 2 * precision * recall / max(1e-12, precision + recall),
+            "empty_observations": int((~present).sum()),
+            "empty_false_positive_rate": float(detected[~present].mean()),
+            "empty_peak_mean": float(empty_scores.mean()),
+            "empty_peak_p95": float(np.quantile(empty_scores, 0.95)),
             "episode_dice": episode_values,
         }
     return result
@@ -412,6 +441,34 @@ def train(data_dir: str, output_dir: str, *, arm: str, seed: int, steps: int = 2
     return result
 
 
+def evaluate_checkpoint(data_dir: str, output_dir: str, *, arm: str, seed: int,
+                        checkpoint: str | None = None, device: str = "cuda") -> dict:
+    """Re-evaluate a saved arm, including presence and empty-frame diagnostics."""
+    arrays = _open_arrays(data_dir)
+    if arm == "published_control":
+        model = nn.Identity().to(device)
+    elif arm == "token_probe":
+        model = TokenProbe(arrays["tokens"].shape[1]).to(device)
+    elif arm == "direct_image":
+        model = DirectImageCNN().to(device, memory_format=torch.channels_last)
+    else:
+        raise ValueError(f"unknown arm: {arm}")
+    if arm != "published_control":
+        if checkpoint is None:
+            raise ValueError(f"{arm} requires --checkpoint")
+        model.load_state_dict(torch.load(checkpoint, map_location=device, weights_only=True))
+    started = time.time()
+    metrics = evaluate_model(model, arm, arrays, device)
+    destination = Path(output_dir) / f"{arm}-seed{seed}.json"
+    result = json.loads(destination.read_text()) if destination.exists() else {
+        "arm": arm, "seed": seed, "steps": 0}
+    result.update(metrics=metrics, evaluation_elapsed_s=time.time() - started,
+                  evaluation_schema_version=2)
+    destination.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+    print(json.dumps(result, indent=2, sort_keys=True), flush=True)
+    return result
+
+
 def summarize_results(results_dir: str, *, bootstrap_samples: int = 10_000,
                       bootstrap_seed: int = 0) -> dict:
     """Aggregate three-seed metrics and paired episode-bootstrap Dice gaps."""
@@ -438,7 +495,13 @@ def summarize_results(results_dir: str, *, bootstrap_samples: int = 10_000,
         weapon_summary = {"arms": {}}
         for arm, arm_runs in runs.items():
             metrics = {}
-            for metric in ("dice", "mse_skill", "peak_hit", "elapsed_s"):
+            metric_names = ["dice", "mse_skill", "peak_hit", "elapsed_s"]
+            optional = ("presence_average_precision", "presence_precision",
+                        "presence_recall", "presence_f1", "empty_false_positive_rate",
+                        "empty_peak_mean", "empty_peak_p95")
+            metric_names.extend(metric for metric in optional if all(
+                metric in run["metrics"][weapon] for run in arm_runs))
+            for metric in metric_names:
                 values = np.asarray([
                     run["elapsed_s"] if metric == "elapsed_s"
                     else run["metrics"][weapon][metric]
@@ -492,6 +555,11 @@ def main(argv=None) -> None:
     run.add_argument("--arm", choices=("published_control", "token_probe", "direct_image"), required=True)
     run.add_argument("--seed", type=int, default=0); run.add_argument("--steps", type=int, default=20_000)
     run.add_argument("--batch", type=int, default=64); run.add_argument("--device", default="cuda")
+    evaluate = sub.add_parser("evaluate")
+    evaluate.add_argument("--data-dir", required=True); evaluate.add_argument("--output-dir", required=True)
+    evaluate.add_argument("--arm", choices=("published_control", "token_probe", "direct_image"), required=True)
+    evaluate.add_argument("--seed", type=int, default=0); evaluate.add_argument("--checkpoint")
+    evaluate.add_argument("--device", default="cuda")
     summarize = sub.add_parser("summarize")
     summarize.add_argument("--results-dir", required=True)
     summarize.add_argument("--bootstrap-samples", type=int, default=10_000)
@@ -504,6 +572,9 @@ def main(argv=None) -> None:
     elif args.command == "train":
         train(args.data_dir, args.output_dir, arm=args.arm, seed=args.seed,
               steps=args.steps, batch=args.batch, device=args.device)
+    elif args.command == "evaluate":
+        evaluate_checkpoint(args.data_dir, args.output_dir, arm=args.arm, seed=args.seed,
+                            checkpoint=args.checkpoint, device=args.device)
     else:
         summarize_results(args.results_dir, bootstrap_samples=args.bootstrap_samples,
                           bootstrap_seed=args.bootstrap_seed)
