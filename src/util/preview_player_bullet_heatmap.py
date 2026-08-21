@@ -88,13 +88,12 @@ def predict(model, frames: np.ndarray, *, image_size: int, device: str,
     return np.concatenate(output)
 
 
-def overlay(frame: np.ndarray, heatmap: np.ndarray) -> np.ndarray:
-    """Alpha-overlay magma-colored probability, retaining the underlying RGB frame."""
-    height, width = frame.shape[:2]
-    probability = cv2.resize(heatmap, (width, height), interpolation=cv2.INTER_CUBIC)
-    color = plt.get_cmap("magma")(np.clip(probability, 0, 1))[..., :3]
-    alpha = np.clip(probability[..., None] * 0.8, 0, 0.8)
-    return np.clip(frame / 255.0 * (1 - alpha) + color * alpha, 0, 1)
+def heat_only(heatmap: np.ndarray, color: tuple[float, float, float], *,
+              size: tuple[int, int] = (240, 224)) -> np.ndarray:
+    """Render an absolute-probability map on black with a visibility gamma boost."""
+    probability = cv2.resize(heatmap, size, interpolation=cv2.INTER_CUBIC)
+    intensity = np.sqrt(np.clip(probability, 0, 1))[..., None]
+    return intensity * np.asarray(color, dtype=np.float32)
 
 
 def save_sheet(weapon: str, fingerprint: str, steps: list[int], frames: np.ndarray,
@@ -107,13 +106,16 @@ def save_sheet(weapon: str, fingerprint: str, steps: list[int], frames: np.ndarr
         axis.axis("off")
     for axis, step, frame, heatmap, target in zip(
             axes.flat, steps, frames, heatmaps, targets):
-        comparison = np.concatenate([overlay(frame, heatmap),
-                                     overlay(frame, target)], axis=1)
+        prediction = heat_only(heatmap, (1.0, 0.05, 0.75))
+        truth = heat_only(target, (0.0, 1.0, 1.0))
+        separator = np.ones((prediction.shape[0], 4, 3), dtype=np.float32)
+        comparison = np.concatenate([prediction, separator, truth], axis=1)
         axis.imshow(comparison)
         peak = np.unravel_index(np.argmax(heatmap), heatmap.shape)
         axis.set_title(f"action {step} · pred max {heatmap.max():.2f} · "
                        f"GT max {target.max():.0f}\n"
-                       f"prediction ←  |  → ground truth · peak ({peak[1]},{peak[0]})",
+                       f"magenta prediction ←  |  → cyan ground truth · "
+                       f"peak ({peak[1]},{peak[0]})",
                        fontsize=8)
         axis.axis("off")
     figure.suptitle(f"{weapon} boss · predicted player-bullet heatmap · "
