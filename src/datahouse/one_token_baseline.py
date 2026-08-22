@@ -42,23 +42,26 @@ class OneTokenDecoder(nn.Module):
 
 
 class OneTokenAutoencoder(nn.Module):
-    """Current production encoder architecture, initialized and trained from scratch."""
+    """Native-resolution one-token encoder initialized and trained from scratch."""
 
     def __init__(self, config: dict):
         super().__init__()
         config = dict(config)
+        config.update({"input_height": FRAME_HW[0], "input_width": FRAME_HW[1],
+                       "n_layers": 6})
         config["entity_classes"] = 3
         self.encoder = EntityFrameEncoder(config)
         self.decoder = OneTokenDecoder(int(config["hiddim"]))
 
     def forward(self, images: torch.Tensor):
-        token = self.encoder.encode(_encoder_input(images, int(self.encoder.config["image_size"])))
+        token = self.encoder.encode(_encoder_input(images, self.encoder.input_hw))
         return self.decoder(token), self.encoder.entity_head(token), token
 
 
-def _encoder_input(images: torch.Tensor, size: int = 256) -> torch.Tensor:
-    value = F.interpolate(images, size=(size, size), mode="area")
-    return value.mul(255).round().clamp(0, 255).to(torch.uint8).permute(0, 2, 3, 1)
+def _encoder_input(images: torch.Tensor, input_hw: tuple[int, int] = FRAME_HW) -> torch.Tensor:
+    if tuple(images.shape[2:]) != input_hw:
+        raise ValueError(f"training images must have native shape {input_hw}")
+    return images.mul(255).round().clamp(0, 255).to(torch.uint8).permute(0, 2, 3, 1)
 
 
 def _architecture_config(checkpoint_path: str) -> dict:
@@ -84,6 +87,7 @@ def train_decoder(corpus: str, encoder_checkpoint: str, output: str, *,
               "warmup_steps": min(2000, steps), "seed": 0,
               "architecture_source": encoder_checkpoint,
               "encoder_initialization": "random", "decoder_output_hw": list(FRAME_HW),
+              "encoder_input_hw": list(FRAME_HW), "resize": None,
               "loss": "weighted_mse+bce+soft_dice"}
     (root / "config.json").write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
     latest = root / "latest.pt"; start_step = 0

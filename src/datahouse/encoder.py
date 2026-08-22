@@ -27,13 +27,10 @@ def _norm(channels: int) -> nn.Module:
 class ConvEncoder(nn.Module):
     """Dreamer-compatible convolutional feature extractor without policy imports."""
 
-    def __init__(self, *, size: int, depth: int, minres: int):
+    def __init__(self, *, height: int, width: int, depth: int, n_layers: int):
         super().__init__()
         layers: list[nn.Module] = []
         channels = 3
-        n_layers = int(round(math.log2(size / minres)))
-        if minres * 2 ** n_layers != size:
-            raise ValueError("image size must be minres times a power of two")
         for index in range(n_layers):
             out = depth * 2 ** index
             layers += [nn.Conv2d(channels, out, 4, stride=2, padding=1),
@@ -41,6 +38,9 @@ class ConvEncoder(nn.Module):
             channels = out
         self.convs = nn.Sequential(*layers)
         self.conv_out_ch = channels
+        self.output_hw = (height // 2 ** n_layers, width // 2 ** n_layers)
+        if min(self.output_hw) < 1:
+            raise ValueError("too many convolution stages for input dimensions")
 
     def forward_features(self, image: torch.Tensor) -> torch.Tensor:
         return self.convs(image)
@@ -76,15 +76,25 @@ class FrameEncoder(nn.Module):
     def __init__(self, config: dict[str, Any]):
         super().__init__()
         self.config = dict(config)
-        size = int(config["image_size"])
-        minres = int(config["minres"])
+        if "input_height" in config or "input_width" in config:
+            height = int(config["input_height"])
+            width = int(config["input_width"])
+            n_layers = int(config["n_layers"])
+        else:
+            height = width = int(config["image_size"])
+            minres = int(config["minres"])
+            n_layers = int(round(math.log2(height / minres)))
+            if minres * 2 ** n_layers != height:
+                raise ValueError("image size must be minres times a power of two")
+        self.input_hw = (height, width)
         proj_ch = int(config["proj_ch"])
         dim = int(config["hiddim"])
-        self.view_backbone = ConvEncoder(size=size, depth=int(config["depth"]),
-                                         minres=minres)
+        self.view_backbone = ConvEncoder(height=height, width=width,
+                                         depth=int(config["depth"]), n_layers=n_layers)
         self.reduce = nn.Sequential(nn.Conv2d(self.view_backbone.conv_out_ch, proj_ch, 1),
                                     _norm(proj_ch), nn.SiLU())
-        self.proj = nn.Sequential(nn.Linear(proj_ch * minres * minres, dim),
+        feature_height, feature_width = self.view_backbone.output_hw
+        self.proj = nn.Sequential(nn.Linear(proj_ch * feature_height * feature_width, dim),
                                   nn.LayerNorm(dim), nn.SiLU(), nn.Linear(dim, dim))
         self.token_ln = nn.LayerNorm(dim)
 
@@ -92,6 +102,8 @@ class FrameEncoder(nn.Module):
         """Encode uint8 ``(B, H, W, 3)`` RGB images into frame tokens."""
         if image.dtype != torch.uint8 or image.ndim != 4 or image.shape[-1] != 3:
             raise ValueError("encoder input must be uint8 BHWC RGB")
+        if tuple(image.shape[1:3]) != self.input_hw:
+            raise ValueError(f"encoder input must have spatial shape {self.input_hw}")
         x = image.permute(0, 3, 1, 2).float().div(255.0)
         z = self.reduce(self.view_backbone.forward_features(x))
         return self.token_ln(self.proj(z.flatten(1)))

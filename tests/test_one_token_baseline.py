@@ -11,11 +11,14 @@ def test_one_token_decoder_outputs_native_frame():
     assert 0 <= float(output.min()) <= float(output.max()) <= 1
 
 
-def test_one_token_autoencoder_retrains_current_architecture():
+def test_one_token_autoencoder_uses_native_frame_without_resize():
     config = {"image_size": 256, "minres": 4, "depth": 4, "proj_ch": 8,
               "hiddim": 512, "aux_size": 32, "entity_classes": 4,
               "head_depth": 4}
     model = OneTokenAutoencoder(config)
+    assert model.encoder.input_hw == (224, 240)
+    assert model.encoder.view_backbone.output_hw == (3, 3)
+    assert model.encoder.proj[0].in_features == 3 * 3 * 8
     with torch.no_grad():
         reconstruction, entities, token = model(torch.rand(1, 3, 224, 240))
     assert token.shape == (1, 512)
