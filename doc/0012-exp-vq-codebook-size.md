@@ -24,11 +24,12 @@ Record trace fingerprint, action index, frame hash, split, and RAM-derived playe
 enemy, and merged-projectile centers in a frozen sample manifest.
 
 The exact corpus is 1,196,977 frames; split totals are recorded after replay.
-Store it only as a disposable cache under `tmp/0012-vq-codebook/`: lossless native PNGs
-in sequential ten-episode tar files plus compact center/offset arrays. Generate
-Gaussian masks in the loader. A 200-frame native replay sample averaged 8.6 KB per PNG,
-so the image payload is expected to be about 8.6 GB. All four runs consume the same
-cache; final policy shards contain no PNGs.
+Store lossless native PNGs and compact entity-center JSON in sequential ten-episode
+tar files under `tmp/0012-vq-codebook/`. Generate the disposable 0014 indexed chunk
+cache from those tars: memory-mapped native `uint8` frames and precomputed `float16`
+Gaussian targets. A 200-frame native replay sample averaged 8.6 KB per PNG; indexed
+arrays use more disk but remove repeated decode and target-generation work. All four
+runs consume the same indexed cache; final policy shards contain neither representation.
 
 Use one convolutional encoder/decoder with a 2×2 quantized grid, 256-dimensional
 latents, one codebook shared across the four positions, and the 0011 objective. The

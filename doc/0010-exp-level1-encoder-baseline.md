@@ -15,6 +15,9 @@ Use the 1,000 complete Level 1 traces selected by experiment 0012 from snapshot
 `l1-full-10k-v1` (`14cf8463…bf85be8a`): 800 train, 100 validation, and 100 untouched
 test episodes, with every observation retained. Native targets are 224×240 RGB frames
 and RAM-derived 32×32 player, enemy, and merged-projectile heatmaps.
+Generate a disposable indexed cache from the frozen lossless corpus using the 0014
+layout. Training and validation read its memory-mapped frames and precomputed targets;
+the split and frame population are unchanged.
 
 Instantiate the architecture of published encoder `f36041bc…1923c` from scratch: resize
 the frame to 256×256, apply its convolutional backbone and projection, and emit one
