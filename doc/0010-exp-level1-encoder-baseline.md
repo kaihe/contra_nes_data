@@ -5,9 +5,9 @@ Status: Proposed
 ## 1. Goal
 
 Establish the validation baseline against which four-position continuous and VQ image
-encoders are compared. Measure native-frame information recoverable from the published
-512-D continuous token and entity information exposed by its published auxiliary head.
-This experiment does not retrain the encoder or inspect the test split.
+encoders are compared. Retrain the current one-token architecture from scratch and
+measure the native-frame and entity information carried by its 512-D continuous token.
+Do not initialize from published weights or inspect the test split.
 
 ## 2. Setup
 
@@ -16,18 +16,14 @@ Use the 1,000 complete Level 1 traces selected by experiment 0012 from snapshot
 test episodes, with every observation retained. Native targets are 224×240 RGB frames
 and RAM-derived 32×32 player, enemy, and merged-projectile heatmaps.
 
-Freeze published encoder `f36041bc…1923c`, which maps a frame resized to 256×256 into
-one 512-D continuous token. Its checkpoint has no reconstruction decoder. Train a new
-decoder from only the frozen token to the native 224×240 frame for 10,000 steps with
+Instantiate the architecture of published encoder `f36041bc…1923c` from scratch: resize
+the frame to 256×256, apply its convolutional backbone and projection, and emit one
+512-D continuous token. Attach a native 224×240 reconstruction decoder and a fresh
+three-channel 32×32 entity head. Train every component jointly for 20,000 steps with
 effective batch 128, AdamW at `3e-4`, 2,000 warmup steps, cosine decay, mixed precision,
-and seed 0. Train with the entity-weighted pixel MSE from 0011. The decoder measures
-recoverability from the token; it cannot add image information absent from the token.
-
-Evaluate entity metrics without fitting a new probe. Use the checkpoint's published
-four-channel head and map it to the comparison taxonomy: player is the player channel,
-enemy is the enemy channel, and projectile is the maximum of player-bullet and
-enemy-bullet probabilities. Generate comparison targets with native-pixel sigmas
-`(6,6,4)`. Store the run under
+and seed 0. Use the same weighted pixel MSE plus player/enemy/projectile BCE and soft
+Dice objective as the four-continuous-token warmup. Generate targets with native-pixel
+sigmas `(6,6,4)`. Store the run under
 `runs/encoder-baseline/one-token-reconstruction/`.
 
 ## 3. Evaluation metrics
@@ -38,7 +34,7 @@ same definitions for every later continuous/VQ candidate.
 | metric | purpose | source |
 |---|---|---|
 | exact RGB-pixel accuracy, unweighted/weighted MSE, PSNR | reconstruction fidelity | native frame and trained decoder output |
-| player, enemy, projectile soft Dice | entity information retained | published auxiliary head and RAM heatmaps |
+| player, enemy, projectile soft Dice | entity information retained | jointly trained auxiliary head and RAM heatmaps |
 | projectile presence AP and empty-frame FPR at 0.5 | detect hallucination hidden by positive-only Dice | merged projectile heatmap maximum |
 
 Record both exact RGB-pixel accuracy (all three channels match) and the diagnostic
@@ -49,7 +45,7 @@ frames and the fixed maximum-probability threshold 0.5.
 | recorded number | provenance |
 |---|---|
 | 1,000 episodes and 1,196,977 frames | 0012 corpus markers under `tmp/0012-vq-codebook/corpus-1k-all/` |
-| encoder identity, 512-D float16 token | published encoder `spec.json` and checkpoint SHA-256 |
+| one-token architecture and 512-D width | published encoder `spec.json`; weights initialized from scratch |
 | split, decoder recipe, objectives, and metrics | predeclared setup above |
 
 ## 4. Conclusion
