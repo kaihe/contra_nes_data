@@ -20,6 +20,8 @@ from torch import nn
 from torch.nn import functional as F
 from torch.utils.data import DataLoader, IterableDataset, get_worker_info
 
+from datahouse.indexed_chunks import IndexedChunkDataset, collate_indexed
+
 
 FRAME_HW = (224, 240)
 GRID = 32
@@ -176,7 +178,36 @@ class FrameTarDataset(IterableDataset):
 
 def collate_frames(rows):
     images = np.stack([row[0] for row in rows])
-    return torch.from_numpy(images), [row[1] for row in rows]
+    metadata = [row[1] for row in rows]
+    return torch.from_numpy(images), metadata, [row["key"] for row in metadata]
+
+
+def frame_loader(corpus: str | Path, split: str, *, batch: int, workers: int,
+                 seed: int = 0) -> DataLoader:
+    """Use indexed chunks when present, retaining tar compatibility."""
+    root = Path(corpus)
+    indexed = any(root.glob("chunk-*/manifest.json"))
+    dataset = IndexedChunkDataset(root, split, seed=seed) if indexed else \
+        FrameTarDataset(root, split, seed=seed)
+    return DataLoader(dataset, batch_size=batch, num_workers=workers,
+                      collate_fn=collate_indexed if indexed else collate_frames,
+                      pin_memory=True, persistent_workers=workers > 0,
+                      prefetch_factor=2 if workers else None)
+
+
+def pixel_weights_from_targets(targets: torch.Tensor) -> torch.Tensor:
+    coarse = 1.0 + sum(weight * targets[:, channel:channel + 1]
+                       for channel, weight in enumerate(PIXEL_WEIGHTS))
+    return F.interpolate(coarse.clamp(max=16.0), size=FRAME_HW, mode="bilinear",
+                         align_corners=False)
+
+
+def prepare_targets(supervision, *, device: torch.device) -> tuple[torch.Tensor,
+                                                                    torch.Tensor]:
+    if isinstance(supervision, torch.Tensor):
+        targets = supervision.to(device, non_blocking=True).float()
+        return targets, pixel_weights_from_targets(targets)
+    return entity_targets(supervision, device=device)
 
 
 def entity_targets(metadata: list[dict], *, device: torch.device,
@@ -195,12 +226,7 @@ def entity_targets(metadata: list[dict], *, device: torch.device,
                 blob = torch.exp(-((xx - gx).square() + (yy - gy).square()) /
                                  (2 * grid_sigma * grid_sigma))
                 targets[bi, ci] = torch.maximum(targets[bi, ci], blob)
-    coarse_weights = 1.0 + sum(weight * targets[:, ci:ci + 1]
-                               for ci, weight in enumerate(PIXEL_WEIGHTS))
-    coarse_weights.clamp_(max=16.0)
-    pixel_weights = F.interpolate(coarse_weights, size=FRAME_HW, mode="bilinear",
-                                  align_corners=False)
-    return targets, pixel_weights
+    return targets, pixel_weights_from_targets(targets)
 
 
 def warmup_loss(reconstruction: torch.Tensor, images: torch.Tensor,
@@ -257,11 +283,7 @@ def extract_latents(corpus: str, warmup_checkpoint: str, output: str, *,
         raise ValueError("VQ initialization requires the completed 20,000-step warmup")
     model = ContinuousAutoencoder().to(device).eval()
     model.load_state_dict(checkpoint["model"])
-    dataset = FrameTarDataset(corpus, "train", seed=0)
-    loader = DataLoader(dataset, batch_size=batch, num_workers=workers,
-                        collate_fn=collate_frames, pin_memory=True,
-                        persistent_workers=workers > 0,
-                        prefetch_factor=2 if workers else None)
+    loader = frame_loader(corpus, "train", batch=batch, workers=workers)
     temporary = destination.with_suffix(".tmp.npy")
     temporary.parent.mkdir(parents=True, exist_ok=True)
     array = np.lib.format.open_memmap(temporary, mode="w+", dtype=np.float16,
@@ -269,7 +291,7 @@ def extract_latents(corpus: str, warmup_checkpoint: str, output: str, *,
     keys, written = [], 0
     started = time.time()
     with torch.inference_mode():
-        for raw_images, metadata in loader:
+        for raw_images, _supervision, batch_keys in loader:
             take = min(len(raw_images), frames - written)
             images = raw_images[:take].to(device, non_blocking=True).permute(
                 0, 3, 1, 2).float().div_(255)
@@ -278,7 +300,7 @@ def extract_latents(corpus: str, warmup_checkpoint: str, output: str, *,
                 latent = model.encode(images)
             values = latent.permute(0, 2, 3, 1).reshape(-1, LATENT_DIM).float().cpu().numpy()
             array[written * 4:(written + take) * 4] = values.astype(np.float16)
-            keys.extend(row["key"] for row in metadata[:take])
+            keys.extend(batch_keys[:take])
             written += take
             if written % 10_000 < take:
                 print(f"latents: {written}/{frames} frames", flush=True)
@@ -378,10 +400,7 @@ def train_warmup(corpus: str, output: str, *, steps: int = 20_000,
         scaler.load_state_dict(checkpoint["scaler"])
         start_step = int(checkpoint["step"])
         print(f"resuming at step {start_step}", flush=True)
-    dataset = FrameTarDataset(corpus, "train", seed=0)
-    loader = DataLoader(dataset, batch_size=micro_batch, num_workers=workers,
-                        collate_fn=collate_frames, pin_memory=True,
-                        persistent_workers=workers > 0, prefetch_factor=2 if workers else None)
+    loader = frame_loader(corpus, "train", batch=micro_batch, workers=workers)
     iterator = iter(loader)
     accumulation = effective_batch // micro_batch
     metrics_path = output_path / "metrics.jsonl"
@@ -394,9 +413,9 @@ def train_warmup(corpus: str, output: str, *, steps: int = 20_000,
         optimizer.zero_grad(set_to_none=True)
         sums = {name: 0.0 for name in ("loss", "pixel", "bce", "dice")}
         for _ in range(accumulation):
-            raw_images, metadata = next(iterator)
+            raw_images, supervision, _keys = next(iterator)
             images = raw_images.to(device, non_blocking=True).permute(0, 3, 1, 2).float().div_(255)
-            targets, weights = entity_targets(metadata, device=images.device)
+            targets, weights = prepare_targets(supervision, device=images.device)
             with torch.amp.autocast("cuda", dtype=torch.bfloat16,
                                     enabled=device.startswith("cuda")):
                 reconstruction, logits = model(images)
@@ -471,11 +490,7 @@ def train_vq(corpus: str, warmup_checkpoint: str, codebook_path: str, output: st
         scaler.load_state_dict(checkpoint["scaler"])
         start_step = int(checkpoint["step"])
         print(f"resuming at step {start_step}", flush=True)
-    dataset = FrameTarDataset(corpus, "train", seed=0)
-    loader = DataLoader(dataset, batch_size=micro_batch, num_workers=workers,
-                        collate_fn=collate_frames, pin_memory=True,
-                        persistent_workers=workers > 0,
-                        prefetch_factor=2 if workers else None)
+    loader = frame_loader(corpus, "train", batch=micro_batch, workers=workers)
     iterator = iter(loader)
     accumulation = effective_batch // micro_batch
     metrics_path = output_path / "metrics.jsonl"
@@ -490,10 +505,10 @@ def train_vq(corpus: str, warmup_checkpoint: str, codebook_path: str, output: st
         optimizer.zero_grad(set_to_none=True)
         sums = {name: 0.0 for name in metric_names}
         for _ in range(accumulation):
-            raw_images, metadata = next(iterator)
+            raw_images, supervision, _keys = next(iterator)
             images = raw_images.to(device, non_blocking=True).permute(
                 0, 3, 1, 2).float().div_(255)
-            targets, weights = entity_targets(metadata, device=images.device)
+            targets, weights = prepare_targets(supervision, device=images.device)
             with torch.amp.autocast("cuda", dtype=torch.bfloat16,
                                     enabled=device.startswith("cuda")):
                 reconstruction, logits, latent, raw_quantized, indices = model(images)

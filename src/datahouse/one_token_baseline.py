@@ -17,8 +17,8 @@ from torch.utils.data import DataLoader
 
 from datahouse.encoder import EntityFrameEncoder
 from datahouse.projectile_probe import _average_precision
-from datahouse.vq_train import (ConvBlock, FRAME_HW, FrameTarDataset, collate_frames,
-                                entity_targets, learning_rate, warmup_loss)
+from datahouse.vq_train import (ConvBlock, FRAME_HW, frame_loader, learning_rate,
+                                prepare_targets, warmup_loss)
 
 
 class OneTokenDecoder(nn.Module):
@@ -93,11 +93,7 @@ def train_decoder(corpus: str, encoder_checkpoint: str, output: str, *,
         optimizer.load_state_dict(checkpoint["optimizer"])
         scaler.load_state_dict(checkpoint["scaler"])
         start_step = int(checkpoint["step"])
-    dataset = FrameTarDataset(corpus, "train", seed=0)
-    loader = DataLoader(dataset, batch_size=micro_batch, num_workers=workers,
-                        collate_fn=collate_frames, pin_memory=True,
-                        persistent_workers=workers > 0,
-                        prefetch_factor=2 if workers else None)
+    loader = frame_loader(corpus, "train", batch=micro_batch, workers=workers)
     iterator = iter(loader); accumulation = effective_batch // micro_batch
     metrics_path = root / "metrics.jsonl"; started = time.time()
     model.train()
@@ -107,9 +103,9 @@ def train_decoder(corpus: str, encoder_checkpoint: str, output: str, *,
         optimizer.zero_grad(set_to_none=True)
         sums = {name: 0.0 for name in ("loss", "pixel", "bce", "dice")}
         for _ in range(accumulation):
-            raw, metadata = next(iterator)
+            raw, supervision, _keys = next(iterator)
             images = raw.to(device, non_blocking=True).permute(0, 3, 1, 2).float().div_(255)
-            targets, weights = entity_targets(metadata, device=images.device)
+            targets, weights = prepare_targets(supervision, device=images.device)
             with torch.amp.autocast("cuda", dtype=torch.bfloat16,
                                     enabled=device.startswith("cuda")):
                 reconstruction, logits, _ = model(images)
@@ -141,7 +137,7 @@ class BaselineMetrics:
         self.dice_sum = np.zeros(3); self.presence = []; self.scores = []
 
     def update(self, images, reconstruction, entity_probability, targets, weights,
-               metadata) -> None:
+               projectile_presence) -> None:
         batch = len(images); prediction = reconstruction.mul(255).round().clamp(
             0, 255).to(torch.uint8); truth = images.mul(255).round().to(torch.uint8)
         equal = prediction == truth
@@ -154,7 +150,7 @@ class BaselineMetrics:
         numerator = 2 * (entity_probability * targets).sum((2, 3)) + 1e-6
         denominator = (entity_probability.sum((2, 3)) + targets.sum((2, 3)) + 1e-6)
         self.dice_sum += (numerator / denominator).sum(0).cpu().numpy()
-        self.presence.extend(bool(row["projectile"]) for row in metadata)
+        self.presence.extend(bool(value) for value in projectile_presence)
         self.scores.extend(entity_probability[:, 2].amax((1, 2)).cpu().tolist())
 
     def result(self) -> dict:
@@ -182,23 +178,25 @@ def evaluate(corpus: str, encoder_checkpoint: str, decoder_checkpoint: str,
     checkpoint = torch.load(decoder_checkpoint, map_location=device, weights_only=False)
     model = OneTokenAutoencoder(_architecture_config(encoder_checkpoint)).to(device).eval()
     model.load_state_dict(checkpoint["model"])
-    dataset = FrameTarDataset(corpus, split, seed=0)
-    loader = DataLoader(dataset, batch_size=batch, num_workers=workers,
-                        collate_fn=collate_frames, pin_memory=True,
-                        persistent_workers=workers > 0,
-                        prefetch_factor=2 if workers else None)
+    loader = frame_loader(corpus, split, batch=batch, workers=workers)
     metrics = BaselineMetrics()
-    for raw, metadata in loader:
+    for raw, supervision, _keys in loader:
         if limit is not None and metrics.frames >= limit: break
         if limit is not None and metrics.frames + len(raw) > limit:
-            take = limit - metrics.frames; raw, metadata = raw[:take], metadata[:take]
+            take = limit - metrics.frames
+            raw = raw[:take]
+            supervision = supervision[:take]
         images = raw.to(device, non_blocking=True).permute(0, 3, 1, 2).float().div_(255)
-        targets, weights = entity_targets(metadata, device=images.device)
+        targets, weights = prepare_targets(supervision, device=images.device)
+        if isinstance(supervision, torch.Tensor):
+            presence = supervision[:, 2].amax((1, 2)) > 0
+        else:
+            presence = [bool(row["projectile"]) for row in supervision]
         with torch.amp.autocast("cuda", dtype=torch.bfloat16,
                                 enabled=device.startswith("cuda")):
             reconstruction, logits, _ = model(images)
         probability = logits.float().sigmoid()
-        metrics.update(images, reconstruction, probability, targets, weights, metadata)
+        metrics.update(images, reconstruction, probability, targets, weights, presence)
     result = {"schema_version": 1, "experiment": "0010", "split": split,
               "architecture_source": encoder_checkpoint,
               "decoder_checkpoint": decoder_checkpoint, **metrics.result()}

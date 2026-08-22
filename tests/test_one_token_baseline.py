@@ -26,12 +26,12 @@ def test_one_token_autoencoder_retrains_current_architecture():
 def test_perfect_baseline_metrics():
     images = torch.zeros(2, 3, 224, 240)
     targets = torch.zeros(2, 3, 32, 32)
-    metadata = [{"projectile": []}, {"projectile": [[1, 1]]}]
+    presence = [False, True]
     targets[1, 2, 1, 1] = 1
     probability = targets.clone()
     metrics = BaselineMetrics()
     metrics.update(images, images, probability, targets,
-                   torch.ones(2, 1, 224, 240), metadata)
+                   torch.ones(2, 1, 224, 240), presence)
     result = metrics.result()
     assert result["exact_rgb_pixel_accuracy"] == 1
     assert result["unweighted_mse"] == 0
