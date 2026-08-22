@@ -11,7 +11,7 @@
 - [0009 One-token image encoder](0009-design-one-token-image-encoder.md) — Implemented — native 224×240 frame to one 512-D continuous position
 - [0010 One-token image encoder baseline](0010-exp-level1-encoder-baseline.md) — Proposed — reconstruction and entity baseline for continuous/VQ comparisons; carries the retired 0014 indexed-chunk record
 - [0011 Level 2 search efficiency](0011-exp-level2-search-efficiency.md) — Implemented — `64/48/8/30`; keep Platinum workers only
-- [0012 Boss Spread frame shards](0012-design-boss-spread-frame-shards.md) — Proposed — native 224×240 MKV + actions for the D10k Spread episode set, cataloged beside the token shards
+- [0012 Boss Spread frame shards](0012-design-boss-spread-frame-shards.md) — Implemented — native 224×240 MKV + actions for the D10k Spread episode set, cataloged beside the token shards
 - [PNG](PNG.md) — Reference — how PNG turns a 161,280 B frame into ~4,400 B losslessly, and why its bytes are a bad model input
 - [Entities](ENTITIES.md) — Legacy — RAM entity taxonomy and extraction notes
 - [Events](EVENTS.md) — Legacy — event semantics and trace statistics
