@@ -1,6 +1,6 @@
 from datahouse.vq_codebook import split_rows
 from datahouse.vq_train import (ContinuousAutoencoder, entity_targets,
-                                learning_rate, warmup_loss)
+                                learning_rate, VectorQuantizer, warmup_loss)
 import torch
 
 
@@ -44,3 +44,14 @@ def test_learning_rate_warms_up_then_decays():
         learning_rate(1999, base=3e-4, warmup=2000, total=20_000)
     assert learning_rate(2000, base=3e-4, warmup=2000, total=20_000) == 3e-4
     assert learning_rate(20_000, base=3e-4, warmup=2000, total=20_000) == 0
+
+
+def test_vector_quantizer_returns_four_valid_codes_and_gradients():
+    quantizer = VectorQuantizer(16)
+    latent = torch.randn(3, 256, 2, 2, requires_grad=True)
+    straight, raw, indices = quantizer(latent)
+    assert straight.shape == raw.shape == latent.shape
+    assert indices.shape == (3, 2, 2)
+    assert int(indices.min()) >= 0 and int(indices.max()) < 16
+    straight.square().mean().backward()
+    assert latent.grad is not None
