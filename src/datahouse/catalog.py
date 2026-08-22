@@ -55,6 +55,30 @@ CREATE TABLE IF NOT EXISTS collections (
   manifest_sha256 TEXT NOT NULL,
   episodes INTEGER NOT NULL CHECK(episodes > 0)
 );
+CREATE TABLE IF NOT EXISTS frame_shards (
+  id INTEGER PRIMARY KEY,
+  path TEXT NOT NULL UNIQUE,
+  sha256 TEXT NOT NULL UNIQUE,
+  level INTEGER NOT NULL CHECK(level BETWEEN 1 AND 8),
+  task TEXT NOT NULL CHECK(task IN ('boss', 'kill', 'full')),
+  weapon TEXT NOT NULL,
+  format TEXT NOT NULL,
+  frame_height INTEGER NOT NULL CHECK(frame_height > 0),
+  frame_width INTEGER NOT NULL CHECK(frame_width > 0),
+  ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+  episodes INTEGER NOT NULL CHECK(episodes > 0),
+  frames INTEGER NOT NULL CHECK(frames >= 0),
+  UNIQUE(level, task, weapon, format, ordinal)
+);
+CREATE TABLE IF NOT EXISTS frame_shard_episodes (
+  shard_id INTEGER NOT NULL REFERENCES frame_shards(id) ON DELETE RESTRICT,
+  fingerprint TEXT NOT NULL REFERENCES episodes(fingerprint) ON DELETE RESTRICT,
+  ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+  PRIMARY KEY(shard_id, fingerprint),
+  UNIQUE(shard_id, ordinal)
+);
+CREATE INDEX IF NOT EXISTS frame_shard_selection ON frame_shards
+  (level, task, weapon, format, ordinal);
 CREATE TABLE IF NOT EXISTS collection_episodes (
   collection_name TEXT NOT NULL REFERENCES collections(name) ON DELETE RESTRICT,
   fingerprint TEXT NOT NULL REFERENCES episodes(fingerprint) ON DELETE RESTRICT,
@@ -73,6 +97,25 @@ class Shard:
     task: str
     weapon: str
     encoder_sha256: str
+    ordinal: int
+    episodes: int
+    frames: int
+
+
+@dataclass(frozen=True)
+class FrameShard:
+    """One published raw-frame tar. ``format`` plays the role ``encoder_sha256``
+    plays for token shards: the representation discriminator that must not be mixed
+    inside a single training set."""
+
+    path: str
+    sha256: str
+    level: int
+    task: str
+    weapon: str
+    format: str
+    frame_height: int
+    frame_width: int
     ordinal: int
     episodes: int
     frames: int
@@ -132,6 +175,80 @@ def select_shards(db: sqlite3.Connection, *, level: int, task: str, weapon: str,
         if total >= episode_budget:
             return selected
     raise ValueError(f"catalog has {total} matching episodes, below requested {episode_budget}")
+
+
+def register_frame_shard(db: sqlite3.Connection, shard: FrameShard,
+                         fingerprints: Iterable[str]) -> None:
+    """Atomically register a hash-verified frame tar against existing episodes.
+
+    Unlike :func:`register_shard` this never creates ``episodes`` rows. A frame shard
+    republishes episodes the token producer already cataloged, and referencing those
+    same rows is what makes episode-set identity between the two releases a join
+    rather than a convention. An unknown fingerprint is therefore an error: it means
+    the frame release drifted from the token release.
+    """
+    rows = list(fingerprints)
+    if len(rows) != shard.episodes:
+        raise ValueError(f"shard says {shard.episodes} episodes, received {len(rows)}")
+    if len(set(rows)) != len(rows):
+        raise ValueError("duplicate fingerprint within one frame shard")
+    with db:
+        for fingerprint in rows:
+            if db.execute("SELECT 1 FROM episodes WHERE fingerprint=?",
+                          (fingerprint,)).fetchone() is None:
+                raise ValueError(f"episode is not cataloged: {fingerprint}")
+            clash = db.execute(
+                "SELECT s.ordinal FROM frame_shard_episodes fse "
+                "JOIN frame_shards s ON s.id = fse.shard_id "
+                "WHERE fse.fingerprint=? AND s.level=? AND s.task=? AND s.weapon=? "
+                "AND s.format=?",
+                (fingerprint, shard.level, shard.task, shard.weapon,
+                 shard.format)).fetchone()
+            if clash is not None:
+                raise ValueError(f"episode already in frame shard {clash[0]}: {fingerprint}")
+        cursor = db.execute(
+            "INSERT INTO frame_shards(path,sha256,level,task,weapon,format,"
+            "frame_height,frame_width,ordinal,episodes,frames) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (shard.path, shard.sha256, shard.level, shard.task, shard.weapon,
+             shard.format, shard.frame_height, shard.frame_width, shard.ordinal,
+             shard.episodes, shard.frames))
+        shard_id = int(cursor.lastrowid)
+        for ordinal, fingerprint in enumerate(rows):
+            db.execute("INSERT INTO frame_shard_episodes(shard_id,fingerprint,ordinal) "
+                       "VALUES(?,?,?)", (shard_id, fingerprint, ordinal))
+
+
+def token_prefix_fingerprints(db: sqlite3.Connection, *, level: int, task: str,
+                              weapon: str, shard_count: int) -> list[str]:
+    """Fingerprints of the first ``shard_count`` token shards, in consumer order.
+
+    This reproduces how ``contra_nes_policy`` selects a training set — order by
+    ordinal, take a whole-shard prefix — so a frame release can be pinned to exactly
+    the episodes an existing baseline was measured on.
+    """
+    if shard_count < 1:
+        raise ValueError("shard_count must be positive")
+    available = int(db.execute(
+        "SELECT COUNT(*) FROM shards WHERE level=? AND task=? AND weapon=?",
+        (level, task, weapon)).fetchone()[0])
+    if available < shard_count:
+        raise ValueError(f"catalog has {available} {weapon} shards, asked for {shard_count}")
+    return [str(row[0]) for row in db.execute(
+        "SELECT fse.fingerprint FROM shard_episodes fse "
+        "JOIN shards s ON s.id = fse.shard_id "
+        "WHERE s.level=? AND s.task=? AND s.weapon=? AND s.ordinal < ? "
+        "ORDER BY s.ordinal, fse.ordinal",
+        (level, task, weapon, shard_count)).fetchall()]
+
+
+def frame_shard_fingerprints(db: sqlite3.Connection, *, level: int, task: str,
+                             weapon: str, format: str) -> set[str]:
+    """Fingerprints already published as frames, for resumable builds."""
+    return {str(row[0]) for row in db.execute(
+        "SELECT fse.fingerprint FROM frame_shard_episodes fse "
+        "JOIN frame_shards s ON s.id = fse.shard_id "
+        "WHERE s.level=? AND s.task=? AND s.weapon=? AND s.format=?",
+        (level, task, weapon, format)).fetchall()}
 
 
 def register_boundaries(db: sqlite3.Connection,
