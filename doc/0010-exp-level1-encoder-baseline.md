@@ -19,15 +19,19 @@ Generate a disposable indexed cache from the frozen lossless corpus using the 00
 layout. Training and validation read its memory-mapped frames and precomputed targets;
 the split and frame population are unchanged.
 
-Instantiate the architecture of published encoder `f36041bc…1923c` from scratch: resize
-the frame to 256×256, apply its convolutional backbone and projection, and emit one
-512-D continuous token. Attach a native 224×240 reconstruction decoder and a fresh
-three-channel 32×32 entity head. Train every component jointly for 20,000 steps with
+Instantiate the native one-token architecture in 0009 from scratch: preserve the
+224×240 frame, apply six stride-2 convolutional stages and a 3×3-to-512 projection,
+and emit one 512-D continuous token. Attach a native 224×240 reconstruction decoder
+and a fresh three-channel 32×32 entity head. Train every component jointly for 20,000 steps with
 effective batch 128, AdamW at `3e-4`, 2,000 warmup steps, cosine decay, mixed precision,
 and seed 0. Use the same weighted pixel MSE plus player/enemy/projectile BCE and soft
 Dice objective as the four-continuous-token warmup. Generate targets with native-pixel
 sigmas `(6,6,4)`. Store the run under
 `runs/encoder-baseline/one-token-reconstruction/`.
+
+The superseded 256×256 attempt was stopped at step 3,740 after its step-3,000
+checkpoint. It is not evaluated or included in the baseline because the input
+contract changed before completion.
 
 ## 3. Evaluation metrics
 
@@ -48,7 +52,7 @@ frames and the fixed maximum-probability threshold 0.5.
 | recorded number | provenance |
 |---|---|
 | 1,000 episodes and 1,196,977 frames | 0012 corpus markers under `tmp/0012-vq-codebook/corpus-1k-all/` |
-| one-token architecture and 512-D width | published encoder `spec.json`; weights initialized from scratch |
+| native one-token architecture and 512-D width | design 0009; weights initialized from scratch |
 | split, decoder recipe, objectives, and metrics | predeclared setup above |
 
 ## 4. Conclusion

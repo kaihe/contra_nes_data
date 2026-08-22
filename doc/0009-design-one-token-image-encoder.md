@@ -1,30 +1,30 @@
 # One-token image encoder
 
-Status: Implemented
+Status: Accepted
 
 **Question.** What exact image representation does the current datahouse publish for
 each game observation?
 
-**Answer.** Resize one RGB frame to 256×256, compress it with a six-stage convolutional
-network, and emit one normalized 512-D continuous vector. That vector occupies one
-transformer position. Entity heatmaps are training supervision only; neither their
-decoder nor a pixel decoder is part of the published inference path.
+**Answer.** Consume the native 224×240 RGB frame without interpolation, compress it
+with a six-stage convolutional network, and emit one normalized 512-D continuous
+vector. That vector occupies one transformer position. Entity heatmaps are training
+supervision only; neither their decoder nor a pixel decoder is part of the published
+inference path.
 
 ## One frame becomes one continuous transformer token
 
-The encoder accepts a batch of `uint8` RGB images in `(B, 256, 256, 3)` layout. Frame
-rendering code resizes native 224×240 observations with OpenCV `INTER_AREA`; the
-standalone encoder validates the dtype and layout, converts to `(B, 3, 256, 256)`, and
-scales values to `[0,1]`.
+The encoder accepts native `uint8` RGB images in `(B, 224, 240, 3)` layout. It validates
+the dtype and exact spatial layout, converts to `(B, 3, 224, 240)`, and scales values
+to `[0,1]`. It does not resize, crop, pad, or interpolate NES pixels.
 
 The network is:
 
 | stage | operation | output shape per frame |
 |---|---|---|
-| input | `uint8` RGB, `INTER_AREA` resize | `256×256×3` |
-| backbone 1–6 | 4×4 stride-2 convolution, GroupNorm, SiLU | `128²×32`, `64²×64`, `32²×128`, `16²×256`, `8²×512`, `4²×1024` |
-| reduction | 1×1 convolution, GroupNorm, SiLU | `4×4×256` |
-| projection | flatten, `4096→512`, LayerNorm, SiLU, `512→512` | `512` |
+| input | native `uint8` RGB | `224×240×3` |
+| backbone 1–6 | 4×4 stride-2 convolution, GroupNorm, SiLU | `112×120×32`, `56×60×64`, `28×30×128`, `14×15×256`, `7×7×512`, `3×3×1024` |
+| reduction | 1×1 convolution, GroupNorm, SiLU | `3×3×256` |
+| projection | flatten, `2304→512`, LayerNorm, SiLU, `512→512` | `512` |
 | token normalization | LayerNorm | `512` |
 
 There is no temporal operation inside the encoder: every observation is encoded
@@ -54,19 +54,21 @@ measure what the bottleneck retains; they do not change the one-token contract.
 
 ## Checkpoint identity fixes preprocessing and tensor semantics
 
-The implemented bundle is
+The previous implemented bundle is
 `game_trace/datahouse/encoder/f36041bc69f1ce20781d5200bc89970b1b305e12bff5ae826b23581ca0f1923c/`.
-Its `spec.json` records the checkpoint SHA-256, `INTER_AREA` preprocessing, input
-layout, token width, token dtype, and sequence alignment. `EncoderSpec` recomputes the
-checkpoint digest and reads architectural dimensions from the checkpoint. Consumers
-must reject a different digest rather than assuming that equal tensor shapes imply
-equal token meanings.
+It remains the immutable 256×256 compatibility reference; its `spec.json` records
+`INTER_AREA` preprocessing. The native encoder is a new identity with height 224,
+width 240, and preprocessing `none`. `EncoderSpec` recomputes the checkpoint digest
+and reads architectural dimensions from the checkpoint. Consumers must reject a
+different digest rather than assuming that equal output shapes imply equal token
+meanings.
 
-The published checkpoint completed 20,000 steps with seed 0, AdamW at `3e-4`, 500
+The previous checkpoint completed 20,000 steps with seed 0, AdamW at `3e-4`, 500
 warmup steps followed by cosine decay, bf16 mixed precision, weight decay `0.01`, and
 gradient clipping at `1.0`. Its backbone was trained rather than frozen. These values
-describe the existing artifact; the controlled scratch baseline and its measurements
-belong to experiment 0010.
+describe that artifact. The native controlled scratch run and its measurements belong
+to experiment 0010. The indexed corpus already stores native frames, so changing this
+contract requires neither replay nor a second frame cache.
 
 ## A replacement must preserve or explicitly version the token contract
 
@@ -84,6 +86,6 @@ frame, including small projectiles, through one global 512-D bottleneck.
 |---|---|
 | layer dimensions and inference behavior | `src/datahouse/encoder.py`; published checkpoint `config` and state-dict shapes |
 | checkpoint step and original optimization recipe | published checkpoint `step` and `train_config` |
-| digest, preprocessing, output width and dtype | published `spec.json` |
+| legacy digest, preprocessing, output width and dtype | published `spec.json` |
 | reconstruction and entity-retention baseline | experiment 0010 |
 | four-position discrete replacement | design 0011 |
