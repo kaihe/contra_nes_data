@@ -1,6 +1,6 @@
 # Indexed frame chunks for encoder training
 
-Status: Proposed
+Status: Implemented
 
 ## Memory-mapped chunk layout
 
