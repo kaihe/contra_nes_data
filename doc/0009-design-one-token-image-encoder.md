@@ -52,62 +52,66 @@ Experiment 0010 retrains this same inference architecture from scratch with a na
 RGB decoder and a three-channel player/enemy/merged-projectile head. Those decoders
 measure what the bottleneck retains; they do not change the one-token contract.
 
-## Native indexed chunks preprocess the training population once
+## Compressed all-intra episodes are the prepared training dataset
 
-Experiment 0010 uses the 1,000-trace corpus frozen by 0012: 800 train, 100 validation,
-and 100 untouched test episodes, with every observation retained. Trace replay first
-produces a lossless 16,119,787,694-byte tar corpus containing PNG frames and JSON
-entity coordinates. The disposable 0014 cache decodes that corpus once into 100
-memory-mappable chunk directories. It performs no resize or image augmentation:
-`frames.npy` stores native RGB `uint8`, while `targets.npy` stores the RAM-derived
-player, enemy, and merged-projectile 32×32 heatmaps as `float16`. Keys and manifests
-preserve frame identity, split, source hash, shape, and dtype.
+Experiment 0010 uses the 1,000 traces frozen by 0012: 800 train, 100 validation, and
+100 untouched test episodes, with all 1,196,977 observations retained. Trace replay
+has already produced a lossless 16,119,787,694-byte tar corpus containing native PNG
+frames and JSON entity coordinates. Dataset preparation repacks this corpus without
+replaying the emulator, resizing pixels, or changing split membership.
 
-The measured cache contains 1,196,977 frames and occupies 200,487,925,488 bytes
-(186.719 GiB):
+Each prepared episode contains:
 
-| member | bytes/frame | measured size |
-|---|---:|---:|
-| native frame, `224×240×3 uint8` | 161,280 | 179.790 GiB |
-| three `32×32 float16` targets | 6,144 | 6.849 GiB |
-| keys and manifests | variable | 0.079 GiB |
+```text
+<uid>.obs.mkv          # 224×240 RGB, PNG codec, all frames are keyframes
+<uid>.entities.npz     # compact int16 coordinates and per-frame int32 offsets
+<uid>.json             # count, split, source fingerprint and source hashes
+```
 
-One uncompressed row therefore costs 167,424 bytes before its key. The 958,192-row
-train split accounts for about 149.407 GiB; a 20,000-step run at effective batch 128
-consumes 2.56 million samples, or 2.67 nominal passes and about 399 GiB of frame/target
-payload reads. Scaling the same materialization to all 10,000 traces would approach
-1.8 TiB, so the indexed cache is deliberately limited to the fixed 1,000-trace
-encoder experiment and remains reproducible from the smaller tar corpus.
+Episodes are grouped into tar shards. A shard manifest records member offsets and
+sizes so a worker can read one episode without scanning the tar. Preparation writes a
+temporary shard, verifies that decoded frame counts, first/last frames, coordinates,
+splits, and source hashes match the frozen corpus, then publishes it by atomic rename.
+The command is resumable by manifest identity. PNG is lossless and all-intra MKV gives
+every frame its own seek point; the container adds indexing without introducing
+inter-frame dependencies.
 
-Training converts each selected frame to floating point and divides by 255 on the
-device. It converts stored target heatmaps to `float32` and derives the weighted RGB
-loss mask there. Precomputing heatmaps removes JSON parsing and Gaussian construction
-from the hot path. Compact coordinate targets could save at most the measured 6.849
-GiB plus keys, only about 3.7% of this cache; frames dominate the storage decision.
+The existing 186.719 GiB indexed cache is evidence against raw materialization, not
+the final format. Its 179.790 GiB of frames cannot fit in 19 GiB host RAM, and shuffled
+memory-map access eventually becomes random NVMe page faults. The same frozen PNG
+corpus is 15.013 GiB and can remain substantially resident in the page cache. Allowing
+for MKV indexes, compact coordinates, manifests, and tar headers, reserve 20 GiB for
+the prepared dataset; record its exact component sizes after construction. The raw
+cache becomes deletable after the prepared dataset passes equivalence and throughput
+checks.
 
-## Block-local shuffling should keep storage reads sequential
+Training converts decoded frames to floating point and divides by 255 on the device.
+It expands compact entity coordinates into three 32×32 heatmaps and the weighted RGB
+mask per batch. Coordinates, rather than 6.849 GiB of precomputed `float16` heatmaps,
+keep supervision small without changing its declared sigmas `(6,6,4)`.
 
-Memory mapping eliminates PNG decoding but does not make arbitrary reads cheap. The
-current iterator shuffles every row index in a roughly 1.9 GiB chunk and then follows
-that random order. Once the operating-system page cache is cold, this turns an NVMe
-scan into small page faults. The observed symptom is low GPU clocks and utilization
-while loader workers accumulate physical reads; the smaller native encoder cannot
-improve wall time while it waits for batches.
+## Five-hundred-twelve-frame decode windows amortize storage work
 
-The next loader revision should shuffle at two levels. Shuffle chunk order each epoch,
-then shuffle contiguous blocks of 256–512 rows. Read one block sequentially into RAM,
-randomize its rows in memory, and yield its batches before moving to another block.
-Two persistent workers may prefetch pinned blocks. This preserves stochastic ordering
-at chunk, block, and row scales while replacing disk-wide random access with large
-sequential reads. Evaluation remains strictly sequential and deterministic.
+The loader shuffles shard and episode order, seeks to an episode's all-intra video,
+and decodes contiguous 512-frame windows. It then shuffles those decoded frames and
+their coordinates in RAM and emits GPU micro-batches of 32. The I/O window is not a
+model context: frames remain independent, and effective batch 128 is unchanged.
+Validation decodes episodes and frames in fixed sequential order.
 
-Benchmark throughput from a cold page cache and report samples/second, GPU duty cycle,
-physical bytes read, and checkpoint pauses. A warm-cache first minute is not a valid
-run estimate. Keep uncompressed `uint8` frames in the training cache: returning to PNG
-would trade the random-I/O problem for CPU decode work. If the block loader still
-cannot feed the GPU, the next experiment should compare a train-only cache on faster
-local storage or modest block compression with asynchronous decode; neither changes
-the frozen frame population.
+The frozen episodes range from 1,094 to 1,580 frames (median 1,171), so 512 reduces
+container/seek work by 16× relative to the policy loader's 32-frame window without
+usually decoding unused episode tails. One window holds about 81.8 MiB after decode.
+With two persistent workers, prefetch factor two, and an allowance for pinned copies,
+approximately 654 MiB is in flight—well below this machine's host-memory limit.
+
+The policy repo already measured all-intra PyAV decode at 0.192 ms/frame and supplied
+72 32-frame windows/s against a demand of 42; its 0.097 ms/frame resize also disappears
+for this native encoder. Re-measure rather than transplanting those numbers: benchmark
+128, 256, and the selected 512 only if a canary shows a regression, using a cold page
+cache and reporting samples/second, GPU duty cycle, physical bytes read, host-memory
+peak, and checkpoint pauses. The prepared loader is accepted when 512 keeps the GPU
+fed for at least one complete cold-cache shard traversal and reproduces sampled pixels
+and entity targets exactly.
 
 ## Checkpoint identity fixes preprocessing and tensor semantics
 
@@ -146,6 +150,7 @@ frame, including small projectiles, through one global 512-D bottleneck.
 | legacy digest, preprocessing, output width and dtype | published `spec.json` |
 | 1,196,977 rows and split membership | indexed chunk manifests generated from experiment 0012 |
 | cache component sizes | file-size sum under `tmp/0012-vq-codebook/indexed-1k-all/` on 2026-08-22 |
-| 2.56 million samples and 2.67 passes | declared 20,000 steps × effective batch 128, divided by 958,192 train rows |
+| 1,094–1,580 frame range and 1,171 median | episode-prefix counts from the frozen indexed keys |
+| policy decode rate and per-frame costs | `contra_nes_policy/README.md` and `src/contra_policy/token_cache.py` |
 | reconstruction and entity-retention baseline | experiment 0010 |
 | four-position discrete replacement | design 0011 |
