@@ -1,6 +1,6 @@
 # One-token image encoder
 
-Status: Accepted
+Status: Implemented
 
 **Question.** What exact image representation does the current datahouse publish for
 each game observation?
