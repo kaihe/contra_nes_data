@@ -39,8 +39,11 @@ the quantized grid.
 
 Warm the continuous autoencoder for 20,000 steps, then reuse that checkpoint for every
 cell. Initialize each codebook by k-means over four-position latents from 100,000 frozen
-train frames. Train each VQ cell for 100,000 steps with batch 128, AdamW at `3e-4`,
-2,000 warmup steps, cosine decay, mixed precision, and seed 0. Use standard
+train frames. First train each VQ cell for a 10,000-step pilot with batch 128, AdamW at
+`3e-4`, 2,000 warmup steps, cosine decay, mixed precision, and seed 0. Inspect validation
+reconstruction, entity metrics, code usage, and qualitative reconstructions before
+authorizing a longer run. Extend comparable cells to 100,000 steps only when the pilot
+is still improving and has no representation or codebook-collapse failure. Use standard
 straight-through VQ codebook and commitment losses with commitment weight 0.25.
 
 | run | codes/frame | shared entries | stored index width |
