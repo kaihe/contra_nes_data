@@ -8,7 +8,9 @@ import pytest
 from PIL import Image
 
 from datahouse.compressed_episodes import build_shard
-from datahouse.compressed_loader import CompressedEpisodeDataset, is_compressed_corpus
+from datahouse.compressed_loader import (CompressedEpisodeDataset,
+                                         CompressedFramePairDataset,
+                                         is_compressed_corpus)
 from datahouse.full_level import sha256_file
 from datahouse.frame_training import FrameTarDataset, frame_loader
 
@@ -115,6 +117,19 @@ def test_training_split_shuffles_within_windows_and_repeats(corpus):
     assert len(set(keys)) == 11                      # 11 train frames, then a new epoch
     assert keys[:11] != sorted(keys[:11])            # window-local shuffle
     assert sorted(keys[:11]) == sorted(set(keys))    # every frame once per epoch
+
+
+def test_temporal_pairs_stay_consecutive_across_decode_windows(corpus):
+    _, output = corpus
+    dataset = CompressedFramePairDataset(output, "validation", window=2)
+    rows = list(dataset)
+    assert len(rows) == 5
+    for index, (previous, current, meta) in enumerate(rows):
+        assert meta["key"] == f"episode-b-{index:03d}"
+        if index == 0:
+            assert np.array_equal(previous, current)
+        else:
+            assert np.array_equal(previous, rows[index - 1][1])
 
 
 def test_frame_loader_dispatches_to_the_episode_reader(corpus):

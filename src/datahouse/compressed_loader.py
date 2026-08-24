@@ -151,3 +151,42 @@ class CompressedEpisodeDataset(IterableDataset):
                 return
             epoch += 1
             rng.seed(self.seed + worker_id + epoch * 1009)
+
+
+class CompressedFramePairDataset(CompressedEpisodeDataset):
+    """Decode consecutive within-episode frame pairs before window shuffling."""
+
+    def _episode(self, handle, episode: dict, rng: random.Random):
+        table = _coordinates(self._member(handle, episode, ".entities.npz"),
+                             episode["frames"])
+        video = io.BytesIO(self._member(handle, episode, ".obs.mkv"))
+        decoded = 0
+        previous: np.ndarray | None = None
+        buffer: list[np.ndarray] = []
+        with av.open(video) as container:
+            for frame in container.decode(video=0):
+                buffer.append(frame.to_ndarray(format="rgb24"))
+                if len(buffer) == self.window:
+                    yield from self._flush_pairs(episode, table, decoded, buffer,
+                                                 previous, rng)
+                    previous = buffer[-1]
+                    decoded += len(buffer)
+                    buffer = []
+            if buffer:
+                yield from self._flush_pairs(episode, table, decoded, buffer,
+                                             previous, rng)
+                decoded += len(buffer)
+        if decoded != episode["frames"]:
+            raise RuntimeError(f"episode {episode['uid']} decoded {decoded} frames, "
+                               f"manifest declares {episode['frames']}")
+
+    def _flush_pairs(self, episode: dict, table: dict, start: int,
+                     buffer: list[np.ndarray], previous: np.ndarray | None,
+                     rng: random.Random):
+        rows = self._rows(episode, table, start, len(buffer))
+        preceding = [buffer[0] if previous is None else previous, *buffer[:-1]]
+        order = list(range(len(buffer)))
+        if self.shuffle:
+            rng.shuffle(order)
+        for index in order:
+            yield preceding[index], buffer[index], rows[index]
