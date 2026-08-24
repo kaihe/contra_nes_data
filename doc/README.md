@@ -14,6 +14,6 @@
 - [0013 Level 4 search efficiency](0013-exp-level4-search-efficiency.md) — Proposed — adopt `16/48/8/15`; prior `src/agent/priors/level4.yaml`
 - [0015 Enhanced one-token image encoder](0015-exp-enhanced-one-token-image-encoder.md) — Implemented — 1024-D does not improve projectile localization or hallucination enough to replace 512-D
 - [0016 Motion-aware one-token image encoder](0016-design-motion-one-token-image-encoder.md) — Proposed — pixel-aligned residual and appearance streams fuse into one 512-D token
-- [0017 Global motion estimation](0017-exp-global-motion-estimation.md) — Proposed — audit pixel-only `(dx,dy)` against RAM scroll over one complete trace
+- [0017 Global motion estimation](0017-exp-global-motion-estimation.md) — Implemented — pixel-only `(dx,dy)` failed the whole-trace RAM-scroll accuracy gate
 - [Entities](ENTITIES.md) — Legacy — RAM entity taxonomy and extraction notes
 - [Events](EVENTS.md) — Legacy — event semantics and trace statistics

@@ -1,6 +1,6 @@
 # Can pixels recover global camera motion over a complete trace?
 
-Status: Proposed
+Status: Implemented
 
 ## 1. Goal
 
@@ -68,6 +68,34 @@ The estimator passes this one-trace gate only if exact accuracy is at least 99%,
 non-discontinuity pair is within one pixel, and median aligned residual is lower than
 the zero-shift control on scrolling pairs without increasing it on stationary pairs.
 The audit sheet remains required even when these aggregate gates pass.
+
+The pinned trace produced 1,211 pairs: 177 RAM-stationary, 1,034 in-range scrolling,
+and no discontinuities. The complete outputs are in `tmp/0017-global-motion/`.
+
+| population / metric | zero | robust |
+|---|---:|---:|
+| all exact accuracy | 0.146160 | 0.845582 |
+| all within-one-pixel accuracy | 0.148637 | 0.899257 |
+| all `dx` MAE / max | 2.536746 / 3 | 0.393064 / 16 |
+| all `dy` MAE / max | 0 / 0 | 0.052023 / 16 |
+| stationary exact accuracy | 1.000000 | 0.954802 |
+| scrolling exact accuracy | 0 | 0.826886 |
+| scrolling within-one-pixel accuracy | 0.002901 | 0.886847 |
+| scrolling median residual | 14.611410 | 0 |
+| stationary median residual | 0 | 0 |
+
+The robust estimator emitted nonzero motion on 4.5198% of stationary pairs. Its
+confidence-gap p10/median/p90 was 0/5.820199/11.725975 luminance units, showing that a
+material low-confidence tail contains exact score ties. Runtime was 15.32 ms mean,
+14.56 ms median, and 18.56 ms p90 per pair on the evaluation host. It passed both
+residual gates but failed the 99% exact and all-within-one-pixel gates, so the overall
+gate is false.
+
+Reproduce the cached or generation-pinned run with:
+
+```sh
+PYTHONPATH=src python -m datahouse.global_motion
+```
 
 | recorded fact | source |
 |---|---|
