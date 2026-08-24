@@ -26,10 +26,25 @@ def test_one_token_autoencoder_uses_native_frame_without_resize():
     assert entities.shape == (1, 3, 32, 32)
 
 
+def test_one_token_autoencoder_supports_wider_token():
+    config = {"image_size": 256, "minres": 4, "depth": 4, "proj_ch": 8,
+              "hiddim": 512, "aux_size": 32, "entity_classes": 4,
+              "head_depth": 4}
+    model = OneTokenAutoencoder(config, token_dim=1024)
+    assert model.encoder.proj[-1].out_features == 1024
+    assert model.decoder.seed.in_features == 1024
+    assert model.encoder.entity_head.seed.in_features == 1024
+    with torch.no_grad():
+        reconstruction, entities, token = model(torch.rand(1, 3, 224, 240))
+    assert token.shape == (1, 1024)
+    assert reconstruction.shape == (1, 3, 224, 240)
+    assert entities.shape == (1, 3, 32, 32)
+
+
 def test_perfect_baseline_metrics():
     images = torch.zeros(2, 3, 224, 240)
     targets = torch.zeros(2, 3, 32, 32)
-    presence = [False, True]
+    presence = [[True, False, False], [True, False, True]]
     targets[1, 2, 1, 1] = 1
     probability = targets.clone()
     metrics = BaselineMetrics()
@@ -40,3 +55,8 @@ def test_perfect_baseline_metrics():
     assert result["unweighted_mse"] == 0
     assert result["projectile_presence_ap"] == 1
     assert result["projectile_empty_fpr_0.5"] == 0
+    assert result["player_empty_frames"] == 0
+    assert result["player_empty_fpr_0.5"] is None
+    assert result["enemy_empty_frames"] == 2
+    assert result["enemy_empty_fpr_0.5"] == 0
+    assert result["enemy_presence_ap"] is None

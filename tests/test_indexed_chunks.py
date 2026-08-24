@@ -8,7 +8,7 @@ from PIL import Image
 
 from datahouse.indexed_chunks import (IndexedChunkDataset, build_chunk,
                                       collate_indexed, targets_from_metadata)
-from datahouse.vq_train import entity_targets, prepare_targets
+from datahouse.frame_training import entity_targets, prepare_targets
 
 
 def _source_corpus(root):
