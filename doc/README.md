@@ -10,5 +10,6 @@
 - [0011 Four-code VQ image encoder](0011-design-vq-image-encoder.md) — Proposed — four offline spatial codes enter GPT as four positions per frame
 - [0012 Four-token VQ codebook size](0012-exp-vq-codebook-size.md) — Proposed — fixed frame corpus and four codebook capacities
 - [0015 Enhanced one-token image encoder](0015-exp-enhanced-one-token-image-encoder.md) — Implemented — 1024-D does not improve projectile localization or hallucination enough to replace 512-D
+- [0016 Motion-aware one-token image encoder](0016-design-motion-one-token-image-encoder.md) — Proposed — pixel-aligned residual and appearance streams fuse into one 512-D token
 - [Entities](ENTITIES.md) — Legacy — RAM entity taxonomy and extraction notes
 - [Events](EVENTS.md) — Legacy — event semantics and trace statistics
