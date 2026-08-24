@@ -107,3 +107,15 @@ def test_promotion_is_atomic_and_deduplicates_existing_fingerprint(tmp_path):
     assert len(list(production.glob("*.npz"))) == 1
     assert not list(production.glob("*.tmp"))
     assert production_index(production) == {fingerprint: Path(first_path)}
+
+
+def test_promotion_uses_requested_weapon_name(tmp_path):
+    source = tmp_path / "source.npz"
+    source.write_bytes(b"trace")
+    status, path = promote_trace(
+        source, stage="session", config=SearchConfig(16, 24, 8, 15), attempt=0,
+        fingerprint="a" * 64, directory=tmp_path / "production",
+        weapon="laser", known={},
+    )
+    assert status == "promoted"
+    assert Path(path).name.startswith("win_boss_level1_full_laser_grid-")

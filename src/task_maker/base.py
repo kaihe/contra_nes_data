@@ -212,23 +212,26 @@ _MANIFEST_FIELDS = ["file", "label", "split", "start_step", "end_step", "window_
 
 
 def write_segment(seg: Segment, out_root: str) -> str:
-    """Write one segment as a bc_data-shaped .npz under ``out_root/<label>/``."""
+    """Atomically write a bc_data-shaped ``.npz`` under ``out_root/<label>/``."""
     d = os.path.join(out_root, seg.label)
     os.makedirs(d, exist_ok=True)
     path = os.path.join(d, seg.uid + ".npz")
-    np.savez_compressed(
-        path,
-        actions=seg.actions,
-        initial_state=np.frombuffer(seg.initial_state, dtype=np.uint8),
-        label=seg.label,
-        level=seg.level,
-        skip=seg.skip,
-        start_step=seg.start_step,
-        end_step=seg.end_step,
-        src_trace=seg.src_trace,
-        split=seg.split,
-        **seg.meta,
-    )
+    temporary = path + ".tmp"
+    with open(temporary, "wb") as output:
+        np.savez_compressed(
+            output,
+            actions=seg.actions,
+            initial_state=np.frombuffer(seg.initial_state, dtype=np.uint8),
+            label=seg.label,
+            level=seg.level,
+            skip=seg.skip,
+            start_step=seg.start_step,
+            end_step=seg.end_step,
+            src_trace=seg.src_trace,
+            split=seg.split,
+            **seg.meta,
+        )
+    os.replace(temporary, path)
     return path
 
 

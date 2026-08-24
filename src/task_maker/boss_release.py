@@ -27,6 +27,7 @@ import re
 import shutil
 import tarfile
 from collections import Counter
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -85,8 +86,13 @@ def _task_index(pattern: str = DEFAULT_TASK_GLOB) -> dict[str, str]:
 
 def import_traces(trace_paths: list[str], *, batch_id: str, out_root: str,
                   bank_path: str = DEFAULT_BANK,
-                  source_pattern: str = DEFAULT_TASK_GLOB) -> list[str]:
-    """Convert raw full-state wins into replay-verified train-only boss tasks."""
+                  source_pattern: str = DEFAULT_TASK_GLOB,
+                  verify_goal: bool = True) -> list[str]:
+    """Convert raw full-state wins into train-only boss tasks.
+
+    ``verify_goal=False`` trusts the MC trace's recorded win and defers its
+    replay to HF export, where observations and labels must be materialized.
+    """
     bank = load_full_bank(bank_path)
     sources = _task_index(source_pattern)
     written = []
@@ -118,6 +124,12 @@ def import_traces(trace_paths: list[str], *, batch_id: str, out_root: str,
             continue
         seen.add(fingerprint)
         uid = f"{source.uid}__bossfull_{batch_id}_{fingerprint[:16]}"
+        existing = os.path.join(out_root, source.label, uid + ".npz")
+        if os.path.exists(existing):
+            if task_fingerprint(existing) != fingerprint:
+                raise ValueError(f"existing task fingerprint mismatch: {existing}")
+            written.append(existing)
+            continue
         start = BossStart(
             source_path=source_path, source=source, initial_state=initial,
             offset=0, offset_frac=0.0,
@@ -125,7 +137,7 @@ def import_traces(trace_paths: list[str], *, batch_id: str, out_root: str,
             weapon=str(entry["weapon"]), rapid=bool(entry["rapid"]),
             start_x=int(source.meta["start_x"]),
         )
-        seg = task_from_trace(trace_path, start, uid)
+        seg = task_from_trace(trace_path, start, uid, verify_goal=verify_goal)
         seg.meta.update({
             "batch_id": batch_id,
             "stage": "full",
@@ -368,6 +380,27 @@ def _atomic_shard(paths: list[str], dst: str, *, codec: str) -> tuple[int, int, 
     return result
 
 
+def _shard_job(paths: list[str], dst: str, codec: str) -> tuple[int, int, int]:
+    """Pickle-friendly independent shard export job for a process pool."""
+    return _atomic_shard(paths, dst, codec=codec)
+
+
+def write_shard_groups(groups: list[list[str]], *, hf_dir: str, start_index: int,
+                       codec: str, workers: int = 1) -> list[tuple[str, tuple[int, int, int]]]:
+    """Write deterministic groups concurrently without changing group membership."""
+    jobs = [(group, os.path.join(hf_dir, f"boss-train-{index:05d}.tar"), codec)
+            for index, group in enumerate(groups, start_index)]
+    if workers < 1:
+        raise ValueError("workers must be positive")
+    if workers == 1:
+        return [(dst, _shard_job(group, dst, codec)) for group, dst, codec in jobs]
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(_shard_job, group, dst, codec)
+                   for group, dst, codec in jobs]
+        results = [future.result() for future in futures]
+    return [(dst, result) for (_, dst, _), result in zip(jobs, results)]
+
+
 def build_release(*, trace_paths: list[str], batch_id: str, out_dir: str,
                   bank_path: str = DEFAULT_BANK,
                   baseline_train: str = DEFAULT_BASELINE_TRAIN,
@@ -377,7 +410,11 @@ def build_release(*, trace_paths: list[str], batch_id: str, out_dir: str,
                   codec: str = "png",
                   train_mode: str = "baseline_plus_generated",
                   expected_candidates: int | None = None,
-                  holdout_validation_count: int = 0) -> dict:
+                  holdout_validation_count: int = 0,
+                  task_out_dir: str | None = None,
+                  skip_nearest_diversity: bool = False,
+                  trust_wins: bool = False,
+                  workers: int = 1) -> dict:
     """Run the full candidate-to-release pipeline and return its manifest."""
     if not re.fullmatch(r"[A-Za-z0-9._-]+", batch_id):
         raise ValueError("batch_id may contain only letters, digits, dot, underscore and dash")
@@ -391,10 +428,11 @@ def build_release(*, trace_paths: list[str], batch_id: str, out_dir: str,
     manifest_path = os.path.join(out_dir, "manifest.json")
     if os.path.exists(manifest_path):
         raise FileExistsError(f"release is immutable and already exists: {manifest_path}")
-    task_root = os.path.join(out_dir, "tasks")
+    task_root = task_out_dir or os.path.join(out_dir, "tasks")
     candidate_paths = import_traces(
         trace_paths, batch_id=batch_id, out_root=task_root,
         bank_path=bank_path, source_pattern=task_pattern,
+        verify_goal=not trust_wins,
     )
     if holdout_validation_count and len(candidate_paths) != len(trace_paths):
         raise ValueError("raw candidates included exact duplicates before holdout split")
@@ -413,8 +451,20 @@ def build_release(*, trace_paths: list[str], batch_id: str, out_dir: str,
     train_candidates = [release_path_by_source[path] for path in train_sources]
     validation_paths = [release_path_by_source[path] for path in validation_sources]
     baseline_paths = task_paths_for_uids(shard_uids(baseline_train), task_pattern)
-    accepted, diversity = select_diverse(
-        train_candidates, baseline_paths, min_distance=min_distance)
+    if skip_nearest_diversity:
+        accepted = list(train_candidates)
+        diversity = []
+        for path in train_candidates:
+            seg = load_task(path)
+            diversity.append({
+                "uid": seg.uid, "path": path, "weapon": str(seg.meta.get("weapon", "")),
+                "length": len(seg.actions), "fingerprint": task_fingerprint(path),
+                "nearest_uid": None, "nearest_distance": None,
+                "accepted": True, "reason": "accepted",
+            })
+    else:
+        accepted, diversity = select_diverse(
+            train_candidates, baseline_paths, min_distance=min_distance)
     row_by_path = {row["path"]: row for row in diversity}
     measured = [row["nearest_distance"] for row in diversity
                 if row["nearest_distance"] is not None]
@@ -475,9 +525,9 @@ def build_release(*, trace_paths: list[str], batch_id: str, out_dir: str,
                    else baseline_paths + accepted)
     groups = frame_balanced_shards(train_paths, target_frames)
     shard_rows = []
-    for index, group in enumerate(groups):
-        path = os.path.join(hf_dir, f"boss-train-{index:05d}.tar")
-        size, episodes, frames = _atomic_shard(group, path, codec=codec)
+    written = write_shard_groups(groups, hf_dir=hf_dir, start_index=0,
+                                 codec=codec, workers=workers)
+    for group, (path, (size, episodes, frames)) in zip(groups, written):
         weapon_counts = Counter(str(load_task(p).meta.get("weapon", "")) for p in group)
         shard_rows.append({
             "file": os.path.relpath(path, out_dir),
@@ -528,9 +578,9 @@ def build_release(*, trace_paths: list[str], batch_id: str, out_dir: str,
         "accepted_generated_tasks": [
             {
                 "uid": os.path.splitext(os.path.basename(path))[0],
-                "file": os.path.relpath(path, out_dir),
                 "sha256": sha256_file(path),
                 "trace_fingerprint": row_by_path[path]["fingerprint"],
+                **({"file": os.path.relpath(path, out_dir)} if task_out_dir is None else {}),
             }
             for path in accepted
         ],
@@ -568,8 +618,18 @@ def _parse_args(argv=None):
                    default="baseline_plus_generated")
     p.add_argument("--expected-candidates", type=int,
                    help="refuse a live/incomplete trace snapshot with another count")
+    p.add_argument("--snapshot-count", type=int,
+                   help="use the first N lexicographically sorted trace paths")
     p.add_argument("--holdout-validation-count", type=int, default=0,
                    help="reserve this many generated candidates as a disjoint validation shard")
+    p.add_argument("--task-out-dir",
+                   help="write task intermediates outside the immutable release")
+    p.add_argument("--skip-nearest-diversity", action="store_true",
+                   help="retain exact deduplication but omit quadratic nearest-neighbour audit")
+    p.add_argument("--trust-wins", action="store_true",
+                   help="trust MC win traces; defer their replay to HF export")
+    p.add_argument("--workers", type=int, default=1,
+                   help="parallel train-shard export workers")
     return p.parse_args(argv)
 
 
@@ -578,6 +638,13 @@ def main(argv=None):
     traces = sorted(glob.glob(args.traces))
     if not traces:
         raise SystemExit(f"no traces match {args.traces!r}")
+    if args.snapshot_count is not None:
+        if args.snapshot_count < 1:
+            raise SystemExit("--snapshot-count must be positive")
+        if len(traces) < args.snapshot_count:
+            raise SystemExit(
+                f"requested {args.snapshot_count} traces, found only {len(traces)}")
+        traces = traces[:args.snapshot_count]
     build_release(
         trace_paths=traces, batch_id=args.batch_id, out_dir=args.out,
         bank_path=args.state_bank, baseline_train=args.baseline_train,
@@ -586,6 +653,10 @@ def main(argv=None):
         codec=args.codec, train_mode=args.train_mode,
         expected_candidates=args.expected_candidates,
         holdout_validation_count=args.holdout_validation_count,
+        task_out_dir=args.task_out_dir,
+        skip_nearest_diversity=args.skip_nearest_diversity,
+        trust_wins=args.trust_wins,
+        workers=args.workers,
     )
 
 

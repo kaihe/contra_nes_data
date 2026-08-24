@@ -1,6 +1,6 @@
 level: 1
 seed: 20260803
-selection: median-length train source per weapon; full fight only
+selection: median-length train source per weapon; curated rapid variants; full fight only
 states:
 - name: full_flamethrower
   file: full_flamethrower.state
@@ -28,6 +28,19 @@ states:
   boss_hp_start: 62
   skip: 3
   state_sha256: dfaa26ea8365b11293396653752a8f301268c7b0ccc9220ea1dc2442c8ae8249
+- name: full_laser_rapid
+  file: full_laser_rapid.state
+  stage: full
+  source_task: win_level1_20260630230002_i227
+  src_trace: win_level1_20260630230002_i227.npz
+  split: train
+  source_offset: 0
+  offset_frac: 0.0
+  weapon: Laser
+  rapid: true
+  boss_hp_start: 64
+  skip: 3
+  state_sha256: 24f6f2fa735a259539bea2382718bee4509b32be1c4bcbda38e6fc30b08bef5a
 - name: full_regular
   file: full_regular.state
   stage: full

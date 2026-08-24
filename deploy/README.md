@@ -3,6 +3,19 @@
 This runbook provisions an Ubuntu 22.04/24.04 CPU machine for Contra MC search.
 The ROM and generated traces remain outside Git.
 
+## 0. Screen the host
+
+Before cloning or copying the ROM, classify the machine from `lscpu`:
+
+```bash
+python -m util.probe_cloud_host CLOUD7
+```
+
+Keep Platinum 8468 and 8352V. Drop Gold 6133 and E5-2698 v4. Exit 0 is keep, 2 is drop, 3 is
+an unseen CPU — do not bootstrap until that model is classified. Same-SKU
+keepers can still differ in search speed; the probe only avoids known-slow
+boxes.
+
 ## 1. Clone from Gitee
 
 Log in to the worker and clone the branch containing the deployment tooling:
@@ -16,6 +29,10 @@ cd /root/code/contra_nes_data
 ```
 
 After this feature branch is merged into `main`, omit `--branch`.
+
+The clone includes committed action priors (`src/agent/priors/level1.yaml`,
+`level2.yaml`, and `level4.yaml`). Do not copy `game_trace/human_recordings`
+onto the worker.
 
 ## 2. Transfer the ROM
 

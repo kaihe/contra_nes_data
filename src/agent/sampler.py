@@ -4,8 +4,8 @@ Owns everything ``agent.mc_search`` needs to *propose* actions during one search
 
   * the level's action table (``agent/level<N>.yaml``, else ``baseline.yaml``),
   * the action **prior** for that level as a row-stochastic PMF, loaded from a
-    compact versioned artifact (Level 1) or built from a trace glob for legacy
-    level configs,
+    compact versioned artifact (Levels 1, 2, and 4) or built from a trace glob
+    for legacy level configs,
   * masked sampling from that prior against the stateful legal-action mask
     (``agent.action_mask.legal_mask``), and
   * the random **rollout** the Monte-Carlo lookahead scores.
@@ -19,7 +19,7 @@ A level YAML holds the action table (``skip`` + ``actions``, parsed by
       F: -0.02
       J: -0.02
     prior:
-      artifact: "priors/level1.yaml"  # relative to the agent package
+      artifact: "priors/level2.yaml"  # relative to the agent package
 
 Levels without a YAML fall back to the baseline table with default costs and a
 uniform prior.

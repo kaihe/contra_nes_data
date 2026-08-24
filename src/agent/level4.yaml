@@ -1,6 +1,8 @@
-# Level 2 is an indoor base: movement is mostly up/down/left/right and firing
-# wall cores. Keep the full baseline vocabulary, but restore the tuned action
-# prior used by the working contra_agent search.
+# Level 4 is the second indoor base (same core/door layout family as Level 2).
+# Production search from doc/0013: 16 rollouts, rollout length 48, settle
+# margin 8, max rewind 15, eight workers, 600 s, 6,000 actions, level_up.
+# Indoor table and costs match Level 2. The prior is src/agent/priors/level4.yaml
+# counted from 51 unique experiment wins on cloud2.
 #
 # Bit order: [B, NULL, SELECT, START, UP, DOWN, LEFT, RIGHT, A]
 # (B = fire, A = jump).
@@ -28,12 +30,9 @@ actions:
   URJ: [0, 0, 0, 0, 1, 0, 0, 1, 1]
   URF: [1, 0, 0, 0, 1, 0, 0, 1, 0]
 
-# Indoor advancement rewards arrive in bursts around core/door transitions.
-# Small button costs act only as tie-breakers; the old -0.3 defaults can make
-# useful firing score below idling over a 48-step lookahead.
 costs:
   F: -0.02
   J: -0.02
 
 prior:
-  artifact: "priors/level2.yaml"
+  artifact: "priors/level4.yaml"

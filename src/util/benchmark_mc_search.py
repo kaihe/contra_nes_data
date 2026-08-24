@@ -173,13 +173,13 @@ def production_index(directory: Path) -> dict[str, Path]:
 
 
 def promote_trace(path: Path, *, stage: str, config: SearchConfig, attempt: int,
-                  fingerprint: str, directory: Path,
+                  fingerprint: str, directory: Path, weapon: str = "spread",
                   known: dict[str, Path]) -> tuple[str, str]:
     """Atomically retain a valid grid win, without copying an exact duplicate."""
     if fingerprint in known:
         return "existing", str(known[fingerprint])
     directory.mkdir(parents=True, exist_ok=True)
-    name = (f"win_boss_level1_full_spread_grid-{stage}-{config.uid}-"
+    name = (f"win_boss_level1_full_{weapon}_grid-{stage}-{config.uid}-"
             f"a{attempt:03d}-{fingerprint[:16]}.npz")
     destination = directory / name
     temporary = destination.with_suffix(destination.suffix + ".tmp")
@@ -192,7 +192,8 @@ def promote_trace(path: Path, *, stage: str, config: SearchConfig, attempt: int,
 def run_attempt(*, config: SearchConfig, stage: str, attempt: int,
                 sequence: int, state: bytes, metadata: dict, out: Path,
                 workers: int, max_time: int, max_actions: int,
-                production_dir: Path, known: dict[str, Path]) -> dict:
+                production_dir: Path, known: dict[str, Path],
+                weapon: str = "spread") -> dict:
     trace_path = out / "traces" / stage / config.uid / f"attempt-{attempt:03d}.npz"
     trace_path.parent.mkdir(parents=True, exist_ok=True)
     started = time.perf_counter()
@@ -223,7 +224,8 @@ def run_attempt(*, config: SearchConfig, stage: str, attempt: int,
         if replay_valid:
             promotion_status, production_trace_path = promote_trace(
                 trace_path, stage=stage, config=config, attempt=attempt,
-                fingerprint=fingerprint, directory=production_dir, known=known,
+                fingerprint=fingerprint, directory=production_dir,
+                weapon=weapon, known=known,
             )
     return {
         "stage": stage,
@@ -265,7 +267,7 @@ def run_stage(*, stage: str, configs: list[SearchConfig], attempts: int,
               seed: int, state: bytes, metadata: dict, out: Path,
               workers: int, max_time: int, max_actions: int,
               production_dir: Path, known: dict[str, Path],
-              rows: list[dict]) -> list[dict]:
+              rows: list[dict], weapon: str = "spread") -> list[dict]:
     done = {(r["stage"], r["config_id"], int(r["attempt"])) for r in rows}
     schedule = list(round_schedule(configs, attempts, seed))
     for sequence, (config, attempt) in enumerate(schedule):
@@ -278,7 +280,7 @@ def run_stage(*, stage: str, configs: list[SearchConfig], attempts: int,
             config=config, stage=stage, attempt=attempt, sequence=sequence,
             state=state, metadata=metadata, out=out, workers=workers,
             max_time=max_time, max_actions=max_actions,
-            production_dir=production_dir, known=known,
+            production_dir=production_dir, known=known, weapon=weapon,
         )
         append_row(out / "results.jsonl", row)
         rows.append(row)

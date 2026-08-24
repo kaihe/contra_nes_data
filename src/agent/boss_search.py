@@ -346,8 +346,14 @@ def generate_batch(requests: list[BatchRequest], *, batch_id: str,
     return written, skipped, failed
 
 
-def task_from_trace(trace_path: str, start: BossStart, uid: str) -> Segment:
-    """Build and replay-verify a normal boss task from a winning search trace."""
+def task_from_trace(trace_path: str, start: BossStart, uid: str,
+                    *, verify_goal: bool = True) -> Segment:
+    """Build a normal boss task, optionally replay-verifying its boss clear.
+
+    Verification is appropriate for interactive search collection.  A trusted,
+    immutable MC trace bank may defer its only required replay to HF export,
+    which materializes the observation video and labels.
+    """
     with np.load(trace_path, allow_pickle=True) as d:
         actions = np.asarray(d["actions"], dtype=np.uint8)
         skip = int(d["skip"])
@@ -375,14 +381,15 @@ def task_from_trace(trace_path: str, start: BossStart, uid: str) -> Segment:
             "source_offset": start.offset,
         },
     )
-    reached = False
-    end_ram = None
-    for pre, cur in iter_segment(seg):
-        end_ram = cur
-        reached = reached or KillBossMaker().goal_reached(seg, pre, cur)
-    if not reached:
-        raise RuntimeError(f"winning search trace does not replay to boss clear: {trace_path}")
-    seg.meta["end_x"] = player_x(end_ram)
+    if verify_goal:
+        reached = False
+        end_ram = None
+        for pre, cur in iter_segment(seg):
+            end_ram = cur
+            reached = reached or KillBossMaker().goal_reached(seg, pre, cur)
+        if not reached:
+            raise RuntimeError(f"winning search trace does not replay to boss clear: {trace_path}")
+        seg.meta["end_x"] = player_x(end_ram)
     return seg
 
 

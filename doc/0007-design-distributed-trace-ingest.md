@@ -142,7 +142,10 @@ batch lacks acknowledgement for 15 minutes or a worker misses twice its expected
 commit interval.
 
 Every run uses one compact prior identified by SHA-256 in `run.json`. It is never
-rebuilt from live output. Operational gates are: fewer than 0.5% wins lost in a
+rebuilt from live output. Level 2's committed artifact is counted from unique
+fingerprints in committed GCS batches (`python -m util.build_action_prior
+--gcs-root`), then stored in git as `src/agent/priors/level2.yaml` so a clone is
+enough to search. Operational gates are: fewer than 0.5% wins lost in a
 10-worker interruption test; median archive size 1–64 MiB; duplicate rate below
 1%; p95 commit-to-ack below 15 minutes at twice planned scale; and zero accepted
 checksum mismatches during fault injection.
@@ -165,6 +168,7 @@ so no policy-repository change is required.
 | claim | source |
 |---|---|
 | Level 1 has a committed fixed prior | `src/agent/priors/level1.yaml`, `ActionSampler.for_level` |
+| Level 2 has a committed fixed prior | `src/agent/priors/level2.yaml` counted from 300 unique GCS traces |
 | token-shard catalog has a single transactional owner | `doc/0004-design-tokenized-datahouse.md` |
 | bootstrap keeps ROM and data outside Git | `deploy/README.md`, `deploy/setup_cloud_worker.sh` |
 | GCS supports Application Default Credentials and generation preconditions | Google Cloud Storage client documentation; authenticated upload remains a gate |
