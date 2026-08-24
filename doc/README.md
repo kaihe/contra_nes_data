@@ -13,7 +13,8 @@
 - [0011 Level 2 search efficiency](0011-exp-level2-search-efficiency.md) — Implemented — `64/48/8/30`; keep Platinum workers only
 - [0013 Level 4 search efficiency](0013-exp-level4-search-efficiency.md) — Proposed — adopt `16/48/8/15`; prior `src/agent/priors/level4.yaml`
 - [0015 Enhanced one-token image encoder](0015-exp-enhanced-one-token-image-encoder.md) — Implemented — 1024-D does not improve projectile localization or hallucination enough to replace 512-D
-- [0016 Motion-aware one-token image encoder](0016-design-motion-one-token-image-encoder.md) — Proposed — pixel-aligned residual and appearance streams fuse into one 512-D token
+- [0016 Motion-aware one-token image encoder](0016-design-motion-one-token-image-encoder.md) — Superseded by 0018 — alignment-dependent residual and appearance streams
 - [0017 Global motion estimation](0017-exp-global-motion-estimation.md) — Implemented — pixel-only `(dx,dy)` failed the whole-trace RAM-scroll accuracy gate
+- [0018 Frame-difference one-token encoder](0018-design-frame-difference-one-token-encoder.md) — Proposed — early-fuse current RGB and signed frame difference into one 512-D token
 - [Entities](ENTITIES.md) — Legacy — RAM entity taxonomy and extraction notes
 - [Events](EVENTS.md) — Legacy — event semantics and trace statistics

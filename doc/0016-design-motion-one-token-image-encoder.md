@@ -1,6 +1,6 @@
 # Motion-aware one-token image encoder
 
-Status: Proposed
+Status: Superseded by 0018
 
 **Question.** How should one 512-D image token retain motion and small moving objects
 without spending most of its capacity repeatedly encoding a static or globally
