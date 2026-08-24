@@ -1,6 +1,6 @@
 # 0012 — Boss Spread frame shards
 
-Status: Implemented
+Status: Proposed
 
 The datahouse publishes Level-1 boss episodes as 512-D token shards. The ViT policy
 direction needs the same episodes as pixels. This adds a raw-frame release beside the
@@ -71,11 +71,7 @@ JOIN shards ON shards.id = s.shard_id
 WHERE shards.weapon = 'spread' AND shards.ordinal < 13;
 ```
 
-Published: 40 shards, 9,815 episodes, 768,976 frames, 5.4 GiB. The identity join above
-returns 9,815 with zero frame episodes outside the prefix, and `contra_nes_policy`'s
-loader still opens the Spread slice at 40,000 episodes across 53 single-encoder shards.
-
-The release targets the set that `config_bc_mixed_d10.yaml` already trains on.
+The initial release targets the set that `config_bc_mixed_d10.yaml` already trains on.
 That config sets `shard_counts.spread: 13`, and the policy orders shards by
 `(weapon, ordinal)`, so D10k Spread is the first 13 token shards:
 

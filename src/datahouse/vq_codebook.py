@@ -1,4 +1,4 @@
-"""Reproducible frozen frame corpus, first built for experiment 0012.
+"""Reproducible corpus and training pipeline for experiment 0012.
 
 The corpus command replays the frozen ``l1-full-10k-v1`` snapshot, samples at
 most 100 native RGB observations per episode, and writes sequential PNG tar
