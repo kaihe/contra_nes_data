@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -22,6 +23,42 @@ from datahouse.one_token_baseline import (BaselineMetrics, OneTokenAutoencoder,
 
 
 PARAMETERS = 17_667_078
+
+
+def export_encoder(training_checkpoint: str | Path, output: str | Path) -> dict:
+    """Export the 0019 inference path and its rectangular temporal contract."""
+    training = torch.load(training_checkpoint, map_location="cpu", weights_only=False)
+    run_config = training["config"]
+    architecture_source = run_config["architecture_source"]
+    architecture = _architecture_config(architecture_source)
+    model = FrameDifferenceAutoencoder(architecture)
+    model.load_state_dict(training["model"])
+    config = dict(architecture)
+    config.update({"hiddim": 512, "input_height": 224, "input_width": 240,
+                   "n_layers": 6, "entity_classes": 3,
+                   "input_kind": "rgb_signed_frame_difference",
+                   "first_frame_delta": "zero"})
+    output = Path(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_suffix(output.suffix + ".tmp")
+    torch.save({"encoder": model.encoder.state_dict(), "config": config,
+                "experiment": "0019", "training_checkpoint": str(training_checkpoint)},
+               temporary)
+    os.replace(temporary, output)
+    digest = hashlib.sha256(output.read_bytes()).hexdigest()
+    spec = {
+        "format_version": 2, "checkpoint": output.name,
+        "checkpoint_sha256": digest,
+        "input": {"layout": "uint8_rgb_pair_bhwc", "height": 224, "width": 240,
+                  "delta": "current_minus_previous_signed_float",
+                  "first_frame_delta": "zero"},
+        "tokens": {"dtype": "float16", "width": 512,
+                   "layout": "goal_then_decision_frames",
+                   "action_alignment": "raw_indices; policy shifts target by one"},
+    }
+    (output.parent / "spec.json").write_text(
+        json.dumps(spec, indent=2, sort_keys=True) + "\n")
+    return spec
 
 
 def collate_pairs(rows):
@@ -256,6 +293,10 @@ def main() -> None:
     eval_parser.add_argument("--split", default="validation")
     eval_parser.add_argument("--batch", type=int, default=32)
     eval_parser.add_argument("--limit", type=int)
+    export_parser = sub.add_parser("export")
+    export_parser.add_argument("--checkpoint", default=(
+        "runs/encoder-motion/frame-difference-wsd-20000/latest.pt"))
+    export_parser.add_argument("--output", required=True)
     args = parser.parse_args()
     if args.command == "train":
         train(args.corpus, args.encoder, args.output, steps=args.steps,
@@ -263,10 +304,13 @@ def main() -> None:
               workers=args.workers, device=args.device, save_every=args.save_every,
               log_every=args.log_every, warmup=args.warmup,
               decay_start=args.decay_start)
-    else:
+    elif args.command == "evaluate":
         evaluate(args.corpus, args.encoder, args.checkpoint, args.output,
                  split=args.split, batch=args.batch, workers=args.workers,
                  device=args.device, limit=args.limit)
+    else:
+        print(json.dumps(export_encoder(args.checkpoint, args.output), indent=2,
+                         sort_keys=True))
 
 
 if __name__ == "__main__":

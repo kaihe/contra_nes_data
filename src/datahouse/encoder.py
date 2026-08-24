@@ -109,6 +109,45 @@ class FrameEncoder(nn.Module):
         return self.token_ln(self.proj(z.flatten(1)))
 
 
+class TemporalFrameEncoder(FrameEncoder):
+    """0019 encoder over current RGB plus signed current-minus-previous RGB."""
+
+    def __init__(self, config: dict[str, Any]):
+        super().__init__(config)
+        old = self.view_backbone.convs[0]
+        expanded = nn.Conv2d(6, old.out_channels, old.kernel_size,
+                             stride=old.stride, padding=old.padding,
+                             dilation=old.dilation, groups=old.groups,
+                             bias=old.bias is not None,
+                             padding_mode=old.padding_mode)
+        self.view_backbone.convs[0] = expanded
+
+    def encode_pair(self, current: torch.Tensor,
+                    previous: torch.Tensor) -> torch.Tensor:
+        """Encode equal-shape uint8 BHWC pairs; the delta remains signed float."""
+        expected = (*self.input_hw, 3)
+        if (current.dtype != torch.uint8 or previous.dtype != torch.uint8 or
+                current.ndim != 4 or previous.shape != current.shape or
+                tuple(current.shape[1:]) != expected):
+            raise ValueError(f"temporal inputs must be equal uint8 B{expected}")
+        current_float = current.permute(0, 3, 1, 2).float().div(255.0)
+        previous_float = previous.permute(0, 3, 1, 2).float().div(255.0)
+        x = torch.cat((current_float, current_float - previous_float), dim=1)
+        z = self.reduce(self.view_backbone.forward_features(x))
+        return self.token_ln(self.proj(z.flatten(1)))
+
+    def encode(self, image: torch.Tensor) -> torch.Tensor:
+        """Encode a standalone image with zero delta, used for visual goals."""
+        return self.encode_pair(image, image)
+
+    def encode_sequence(self, images: torch.Tensor) -> torch.Tensor:
+        """Encode one episode's BHWC sequence without crossing its boundary."""
+        if len(images) == 0:
+            return torch.empty((0, int(self.config["hiddim"])), device=images.device)
+        previous = torch.cat((images[:1], images[:-1]), dim=0)
+        return self.encode_pair(images, previous)
+
+
 class HeatmapHead(nn.Module):
     """Decode four occupancy heatmaps from the single frame token."""
 
@@ -176,3 +215,21 @@ def load_entity_encoder(checkpoint: str, *, map_location: str = "cpu"
     encoder = EntityFrameEncoder(payload["config"])
     encoder.load_state_dict(payload["encoder"], strict=True)
     return encoder.requires_grad_(False).eval()
+
+
+def load_temporal_encoder(checkpoint: str, *, freeze: bool = True,
+                          map_location: str = "cpu") -> TemporalFrameEncoder:
+    """Load the signed-frame-difference inference path from an exported bundle."""
+    payload: dict[str, Any] = torch.load(os.path.expanduser(checkpoint),
+                                         map_location=map_location,
+                                         weights_only=False)
+    if payload.get("config", {}).get("input_kind") != "rgb_signed_frame_difference":
+        raise ValueError("checkpoint does not declare the temporal input contract")
+    encoder = TemporalFrameEncoder(payload["config"])
+    missing, unexpected = encoder.load_state_dict(payload["encoder"], strict=False)
+    if missing or any(not key.startswith("entity_head.") for key in unexpected):
+        raise ValueError(f"temporal checkpoint mismatch: missing={missing}, "
+                         f"unexpected={unexpected}")
+    if freeze:
+        encoder.requires_grad_(False).eval()
+    return encoder
