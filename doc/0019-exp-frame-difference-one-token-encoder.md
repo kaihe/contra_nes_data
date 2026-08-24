@@ -1,6 +1,6 @@
 # Does signed frame difference improve the one-token encoder?
 
-Status: Proposed
+Status: Implemented
 
 ## 1. Goal
 
@@ -81,6 +81,42 @@ cannot pass.
 | candidate architecture and parameter derivation | `doc/0018-design-frame-difference-one-token-encoder.md` |
 | corpus identity and split | experiments 0010 and 0012 |
 | candidate measurements | candidate `config.json`, `metrics.jsonl`, and `validation.json` |
+
+The candidate completed 20,000 steps in 7,967.88 seconds and evaluated all 119,410
+validation frames. No test frames were inspected.
+
+| metric | 0010 RGB baseline | 0019 frame difference | candidate delta |
+|---|---:|---:|---:|
+| exact RGB channel accuracy | 0.273368 | 0.239027 | -0.034341 |
+| exact RGB pixel accuracy | 0.107388 | 0.087366 | -0.020023 |
+| unweighted MSE | 0.010438 | 0.010952 | +4.92% |
+| weighted MSE | 0.013778 | 0.014403 | +4.53% |
+| PSNR (dB) | 19.8138 | 19.6052 | -0.2086 |
+| player Dice | 0.617711 | 0.622419 | +0.004708 |
+| enemy Dice | 0.643461 | 0.642998 | -0.000463 |
+| projectile Dice | 0.389318 | 0.683252 | +0.293935 |
+| projectile presence AP | 0.987193 | 0.998139 | +0.010946 |
+| projectile empty-frame FPR @ 0.5 | 0.851081 | 0.003023 | -0.848058 |
+
+Both runs used the same 91,294 projectile-positive and 28,116 projectile-empty frames.
+The candidate's projectile peak error over positive frames was 5.9074 pixels mean,
+5.2738 median, and 8.1432 p90. Player had 119,410 positive and zero empty frames, so
+its empty-frame FPR is `null`. Enemy had 113,383 positive and 6,027 empty frames; its
+candidate presence AP was 0.999805 and empty-frame FPR was 0.002489.
+
+| predeclared gate | result |
+|---|---|
+| projectile Dice above 0.389318 | pass: 0.683252 |
+| projectile AP at least 0.987193 | pass: 0.998139 |
+| projectile empty FPR below 0.851081 | pass: 0.003023 |
+| player and enemy Dice lose no more than 0.01 | pass: both within guardrail |
+| weighted MSE worsens no more than 2% | **fail: +4.53%** |
+
+The candidate therefore fails the complete predeclared gate because of reconstruction,
+despite passing every entity and projectile requirement. Baseline values come from
+`runs/encoder-baseline/one-token-wsd-20000/validation-v2.json`; candidate values come
+from `runs/encoder-motion/frame-difference-wsd-20000/validation.json`; wall time comes
+from the step-20,000 row of the candidate `metrics.jsonl`.
 
 ## 4. Conclusion
 
