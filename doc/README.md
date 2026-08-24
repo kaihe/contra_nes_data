@@ -16,6 +16,6 @@
 - [0016 Motion-aware one-token image encoder](0016-design-motion-one-token-image-encoder.md) — Superseded by 0018 — alignment-dependent residual and appearance streams
 - [0017 Global motion estimation](0017-exp-global-motion-estimation.md) — Implemented — pixel-only `(dx,dy)` failed the whole-trace RAM-scroll accuracy gate
 - [0018 Frame-difference one-token encoder](0018-design-frame-difference-one-token-encoder.md) — Proposed — early-fuse current RGB and signed frame difference into one 512-D token
-- [0019 Frame-difference one-token experiment](0019-exp-frame-difference-one-token-encoder.md) — Implemented — temporal input sharply improves projectiles but misses the reconstruction guardrail
+- [0019 Frame-difference one-token experiment](0019-exp-frame-difference-one-token-encoder.md) — Implemented — accept temporal input after large projectile gains with modest reconstruction cost
 - [Entities](ENTITIES.md) — Legacy — RAM entity taxonomy and extraction notes
 - [Events](EVENTS.md) — Legacy — event semantics and trace statistics

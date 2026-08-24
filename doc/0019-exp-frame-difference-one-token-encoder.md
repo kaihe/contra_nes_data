@@ -120,4 +120,11 @@ from the step-20,000 row of the candidate `metrics.jsonl`.
 
 ## 4. Conclusion
 
-_Pending user conclusion after the candidate completes full validation._
+This is a good result. Adding signed frame difference substantially improves the
+information that the one-token encoder retains about small moving projectiles:
+projectile Dice rises from 0.3893 to 0.6833, presence AP improves, and empty-frame FPR
+falls from 85.11% to 0.30%. Player and enemy accuracy remain stable. The 4.53% weighted
+MSE regression exceeds the original 2% reconstruction guardrail, but that modest loss
+of RGB reconstruction quality is acceptable relative to the large improvement in the
+task-relevant motion signal. Keep the six-channel frame-difference encoder as the
+successful motion-encoder candidate for the next stage.
