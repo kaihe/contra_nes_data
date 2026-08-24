@@ -47,8 +47,9 @@ def fetch_canonical_traces(destination: Path, *, client=None) -> list[Path]:
         from google.cloud import storage
         client = storage.Client()
     bucket = client.bucket("contra_nes_trace")
-    markers = sorted(blob for blob in client.list_blobs(bucket, prefix=GCS_PREFIX)
-                     if blob.name.endswith("/COMMITTED.json"))
+    markers = sorted((blob for blob in client.list_blobs(bucket, prefix=GCS_PREFIX)
+                      if blob.name.endswith("/COMMITTED.json")),
+                     key=lambda blob: blob.name)
     if len(markers) != 40:
         raise RuntimeError(f"expected 40 canonical Laser batches, found {len(markers)}")
     destination.mkdir(parents=True, exist_ok=True)
