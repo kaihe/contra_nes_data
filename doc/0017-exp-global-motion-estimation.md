@@ -106,4 +106,9 @@ PYTHONPATH=src python -m datahouse.global_motion
 
 ## 4. Conclusion
 
-_Pending user conclusion after the whole-trace registration audit._
+Give up this pixel-only global-translation estimator as the foundation of the motion
+encoder. Although it removes most scrolling-background residual, its 84.56% exact and
+89.93% within-one-pixel accuracy is not reliable enough: incorrect shifts create
+full-frame false motion that can overwhelm the small player, enemy, and projectile
+signals the motion encoder is intended to preserve. Keep 0017 as a negative result and
+do not spend further experiments tuning its confidence threshold or search range.
