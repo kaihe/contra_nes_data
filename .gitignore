@@ -12,7 +12,6 @@ game_trace/
 
 # machine-specific environment (ROM path, cloud checkout, credentials)
 .env
-.env.legacy
 
 # python
 __pycache__/
@@ -20,4 +19,3 @@ __pycache__/
 *.egg-info/
 .ipynb_checkpoints/
 .venv/
-runs/
