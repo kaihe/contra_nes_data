@@ -1,6 +1,6 @@
 # Level 3 search starts from a replay-derived checkpoint
 
-Status: Proposed
+Status: Implemented
 
 **Question.** How should Monte Carlo search avoid Level 3's unrewarded opening
 approach without replacing the canonical level state or losing the origin of
@@ -34,9 +34,10 @@ integration state. An explicit `--initial-state` remains authoritative for
 one-off experiments.
 
 The selected inspector frame occurs after 39 complete decisions and one NES
-subframe of decision 40. Search begins from the exact emulator state, so its
-three-frame decision clock remains deterministic even though the source capture
-is not on a prior decision boundary.
+subframe of decision 40. The environment resets before rewinding to the captured
+bytes; this avoids stable-retro initialization shifting the selected frame.
+Search then begins from the exact state, so its three-frame decision clock is
+deterministic even though the source capture is not on a prior decision boundary.
 
 ## Generated traces carry checkpoint identity
 

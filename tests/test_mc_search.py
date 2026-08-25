@@ -93,6 +93,66 @@ def test_load_initial_state_checks_manifest_and_returns_lineage(tmp_path):
     assert metadata["initial_state_sha256"] == digest
 
 
+def test_level3_default_search_state_is_manifested_checkpoint():
+    path = mc_search.search_state_path(3)
+
+    state, metadata = mc_search.load_initial_state(path)
+
+    assert state
+    assert os.path.basename(path) == "Level3-frame40.state"
+    assert metadata["inspector_frame"] == 40
+    assert metadata["completed_decisions"] == 39
+    assert metadata["subframes_into_action"] == 1
+    assert metadata["trace_scope"] == "checkpoint_suffix"
+
+
+def test_default_level3_trace_records_checkpoint_lineage(tmp_path, monkeypatch):
+    class Finished:
+        done = True
+
+    checkpoint = tmp_path / "Level3-frame40.state"
+    state = b"level3-checkpoint"
+    with gzip.open(checkpoint, "wb") as fh:
+        fh.write(state)
+    digest = hashlib.sha256(state).hexdigest()
+    (tmp_path / "manifest.yaml").write_text(yaml.safe_dump({
+        "seed": 0,
+        "states": [{
+            "file": checkpoint.name,
+            "state_sha256": digest,
+            "source_trace": "Level3_win.npz",
+            "inspector_frame": 40,
+            "skip": 3,
+        }],
+    }))
+    env = FakeEnv()
+    env.em.state = state
+    monkeypatch.setattr(mc_search, "SEARCH_START_BY_LEVEL", {3: str(checkpoint)})
+    monkeypatch.setattr(mc_search, "make_search_env", lambda level, obs_type: env)
+    monkeypatch.setattr(
+        mc_search, "search_and_play",
+        lambda *args, **kwargs: (
+            [np.zeros(9, dtype=np.uint8)], Finished(), [0.0],
+            mc_search.SearchEffort(search_steps=1),
+        ),
+    )
+    trace_path = tmp_path / "level3.npz"
+
+    mc_search._run_one_search(
+        level=3, rollouts=1, rollout_len=2, max_time=1, max_rewind=1,
+        max_actions=2, goal="level_up", workers=1, settle_margin=0,
+        trace_path=str(trace_path),
+    )
+
+    with np.load(trace_path, allow_pickle=True) as data:
+        assert bytes(data["initial_state"]) == state
+        assert str(data["initial_state_file"]) == checkpoint.name
+        assert str(data["initial_state_sha256"]) == digest
+        assert str(data["source_trace"]) == "Level3_win.npz"
+        assert int(data["inspector_frame"]) == 40
+        assert int(data["source_skip"]) == 3
+
+
 class FakeEmulator:
     def __init__(self):
         self.state = b"state"

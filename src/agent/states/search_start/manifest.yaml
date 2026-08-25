@@ -1,0 +1,17 @@
+seed: 0
+states:
+  - file: Level3-frame40.state
+    level: Level3
+    state_sha256: 36d2c9e8c27269f36cc7a6c54ee484414e9dcf27f8a2808dff77a239c8562212
+    source_trace: contra_agent/contra/human_recordings/Level3/Level3_win_03220002.npz
+    source_trace_sha256: 8eae2e84129c7d1a0351c5e80e3282d92c2d421756273350c773f821ea165e38
+    inspector_frame: 40
+    completed_decisions: 39
+    subframes_into_action: 1
+    skip: 3
+    player_x_screen: 126
+    player_y_screen: 180
+    xscroll: 0
+    yscroll: 0
+    grounded: false
+    trace_scope: checkpoint_suffix
