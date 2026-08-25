@@ -79,6 +79,34 @@ CREATE TABLE IF NOT EXISTS frame_shard_episodes (
 );
 CREATE INDEX IF NOT EXISTS frame_shard_selection ON frame_shards
   (level, task, weapon, format, ordinal);
+CREATE TABLE IF NOT EXISTS feature_shards (
+  id INTEGER PRIMARY KEY,
+  path TEXT NOT NULL UNIQUE,
+  sha256 TEXT NOT NULL UNIQUE,
+  level INTEGER NOT NULL CHECK(level BETWEEN 1 AND 8),
+  task TEXT NOT NULL CHECK(task IN ('boss', 'kill', 'full')),
+  weapon TEXT NOT NULL,
+  representation TEXT NOT NULL,
+  encoder_sha256 TEXT NOT NULL,
+  boundary TEXT NOT NULL,
+  dtype TEXT NOT NULL,
+  channels INTEGER NOT NULL CHECK(channels > 0),
+  feature_height INTEGER NOT NULL CHECK(feature_height > 0),
+  feature_width INTEGER NOT NULL CHECK(feature_width > 0),
+  ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+  episodes INTEGER NOT NULL CHECK(episodes > 0),
+  frames INTEGER NOT NULL CHECK(frames >= 0),
+  UNIQUE(level, task, weapon, representation, encoder_sha256, ordinal)
+);
+CREATE TABLE IF NOT EXISTS feature_shard_episodes (
+  shard_id INTEGER NOT NULL REFERENCES feature_shards(id) ON DELETE RESTRICT,
+  fingerprint TEXT NOT NULL REFERENCES episodes(fingerprint) ON DELETE RESTRICT,
+  ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+  PRIMARY KEY(shard_id, fingerprint),
+  UNIQUE(shard_id, ordinal)
+);
+CREATE INDEX IF NOT EXISTS feature_shard_selection ON feature_shards
+  (level, task, weapon, representation, encoder_sha256, ordinal);
 CREATE TABLE IF NOT EXISTS collection_episodes (
   collection_name TEXT NOT NULL REFERENCES collections(name) ON DELETE RESTRICT,
   fingerprint TEXT NOT NULL REFERENCES episodes(fingerprint) ON DELETE RESTRICT,
@@ -116,6 +144,31 @@ class FrameShard:
     format: str
     frame_height: int
     frame_width: int
+    ordinal: int
+    episodes: int
+    frames: int
+
+
+@dataclass(frozen=True)
+class FeatureShard:
+    """One immutable intermediate-feature tar.
+
+    ``representation`` versions the producer boundary and serialization contract;
+    ``encoder_sha256`` keeps features from different frozen weights disjoint.
+    """
+
+    path: str
+    sha256: str
+    level: int
+    task: str
+    weapon: str
+    representation: str
+    encoder_sha256: str
+    boundary: str
+    dtype: str
+    channels: int
+    feature_height: int
+    feature_width: int
     ordinal: int
     episodes: int
     frames: int
@@ -249,6 +302,57 @@ def frame_shard_fingerprints(db: sqlite3.Connection, *, level: int, task: str,
         "JOIN frame_shards s ON s.id = fse.shard_id "
         "WHERE s.level=? AND s.task=? AND s.weapon=? AND s.format=?",
         (level, task, weapon, format)).fetchall()}
+
+
+def register_feature_shard(db: sqlite3.Connection, shard: FeatureShard,
+                           fingerprints: Iterable[str]) -> None:
+    """Register a feature tar that republishes existing episode membership."""
+    rows = list(fingerprints)
+    if len(rows) != shard.episodes:
+        raise ValueError(f"shard says {shard.episodes} episodes, received {len(rows)}")
+    if len(set(rows)) != len(rows):
+        raise ValueError("duplicate fingerprint within one feature shard")
+    with db:
+        for fingerprint in rows:
+            if db.execute("SELECT 1 FROM episodes WHERE fingerprint=?",
+                          (fingerprint,)).fetchone() is None:
+                raise ValueError(f"episode is not cataloged: {fingerprint}")
+            clash = db.execute(
+                "SELECT s.ordinal FROM feature_shard_episodes fse "
+                "JOIN feature_shards s ON s.id=fse.shard_id "
+                "WHERE fse.fingerprint=? AND s.level=? AND s.task=? AND s.weapon=? "
+                "AND s.representation=? AND s.encoder_sha256=?",
+                (fingerprint, shard.level, shard.task, shard.weapon,
+                 shard.representation, shard.encoder_sha256)).fetchone()
+            if clash is not None:
+                raise ValueError(
+                    f"episode already in feature shard {clash[0]}: {fingerprint}")
+        cursor = db.execute(
+            "INSERT INTO feature_shards(path,sha256,level,task,weapon,representation,"
+            "encoder_sha256,boundary,dtype,channels,feature_height,feature_width,"
+            "ordinal,episodes,frames) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (shard.path, shard.sha256, shard.level, shard.task, shard.weapon,
+             shard.representation, shard.encoder_sha256, shard.boundary, shard.dtype,
+             shard.channels, shard.feature_height, shard.feature_width, shard.ordinal,
+             shard.episodes, shard.frames))
+        shard_id = int(cursor.lastrowid)
+        db.executemany(
+            "INSERT INTO feature_shard_episodes(shard_id,fingerprint,ordinal) "
+            "VALUES(?,?,?)",
+            ((shard_id, fingerprint, ordinal)
+             for ordinal, fingerprint in enumerate(rows)))
+
+
+def feature_shard_fingerprints(db: sqlite3.Connection, *, level: int, task: str,
+                               weapon: str, representation: str,
+                               encoder_sha256: str) -> set[str]:
+    """Fingerprints already published for one exact feature producer."""
+    return {str(row[0]) for row in db.execute(
+        "SELECT fse.fingerprint FROM feature_shard_episodes fse "
+        "JOIN feature_shards s ON s.id=fse.shard_id "
+        "WHERE s.level=? AND s.task=? AND s.weapon=? AND s.representation=? "
+        "AND s.encoder_sha256=?",
+        (level, task, weapon, representation, encoder_sha256)).fetchall()}
 
 
 def register_boundaries(db: sqlite3.Connection,
