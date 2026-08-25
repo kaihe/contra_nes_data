@@ -59,6 +59,13 @@ DEFAULT_STATE_BY_LEVEL = {i: f"Level{i}" for i in range(1, 9)}
 # starts empty, so it keeps the shipped state.
 SPREAD_STATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "states", "spread_gun")
+SEARCH_START_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "states", "search_start")
+# Search-only checkpoints remove unrewarded level openings without replacing the
+# canonical Spread states used by replay, task extraction, and policy training.
+SEARCH_START_BY_LEVEL = {
+    3: os.path.join(SEARCH_START_DIR, "Level3-frame40.state"),
+}
 # Winning traces are product, not scratch (see CLAUDE.md): game_trace/mc_trace/.
 TRACE_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
@@ -80,9 +87,10 @@ def get_level(ram: np.ndarray) -> int:
 def make_search_env(level: int, obs_type):
     """An emulator sitting at `level`'s search start state.
 
-    Where a spread-gun state exists (levels 2-8) it replaces the shipped one:
-    assigning ``initial_state`` is exactly what retro's own ``load_state`` does,
-    so every ``reset()`` keeps applying it.
+    A search-only checkpoint takes precedence where configured (currently Level
+    3); otherwise levels 2-8 use their canonical Spread state. Assigning
+    ``initial_state`` is exactly what retro's own ``load_state`` does, so every
+    ``reset()`` keeps applying the chosen state.
     """
     env = retro.make(
         game=GAME, state=DEFAULT_STATE_BY_LEVEL[level],
@@ -91,12 +99,38 @@ def make_search_env(level: int, obs_type):
         render_mode=None,
         inttype=INTTYPE,
     )
-    spread_state = os.path.join(SPREAD_STATE_DIR, f"Level{level}.state")
-    if os.path.exists(spread_state):
+    checkpoint = SEARCH_START_BY_LEVEL.get(level)
+    if checkpoint is not None:
+        # Retro's reset executes initialization around the supplied state. For a
+        # frame-selected checkpoint, reset first and then rewind so search starts
+        # at the exact inspected emulator byte sequence.
+        env.reset()
+        checkpoint_state, _ = load_initial_state(search_state_path(level))
+        env.initial_state = checkpoint_state
+        rewind_state(env, checkpoint_state)
+        return env
+
+    spread_state = search_state_path(level)
+    if spread_state is not None:
         with gzip.open(spread_state, "rb") as fh:
             env.initial_state = fh.read()
     env.reset()
     return env
+
+
+def search_state_path(level: int) -> str | None:
+    """Return the state file used by default search for ``level``.
+
+    Configured search checkpoints are mandatory: deleting one must fail loudly
+    instead of silently changing the generated collection's start state.
+    """
+    checkpoint = SEARCH_START_BY_LEVEL.get(level)
+    if checkpoint is not None:
+        if not os.path.exists(checkpoint):
+            raise FileNotFoundError(f"configured search checkpoint is missing: {checkpoint}")
+        return checkpoint
+    spread_state = os.path.join(SPREAD_STATE_DIR, f"Level{level}.state")
+    return spread_state if os.path.exists(spread_state) else None
 
 
 def load_initial_state(path: str) -> tuple[bytes, dict]:
@@ -471,11 +505,24 @@ def _run_one_search(level, rollouts, rollout_len, max_time, max_rewind, max_acti
     pool = (mp.Pool(workers, initializer=_worker_init, initargs=(level,))
             if workers > 1 else None)
     env = make_search_env(level, retro.Observations.IMAGE)
+    default_metadata = {}
     if initial_emu_state is None:
         initial_state = env.em.get_state()
+        checkpoint = SEARCH_START_BY_LEVEL.get(level)
+        if checkpoint is not None:
+            checkpoint_state, default_metadata = load_initial_state(checkpoint)
+            if checkpoint_state != initial_state:
+                raise RuntimeError(
+                    f"search environment did not load configured checkpoint: {checkpoint}")
     else:
         initial_state = bytes(initial_emu_state)
         rewind_state(env, initial_state)
+
+    metadata = dict(default_metadata)
+    for key, value in (trace_metadata or {}).items():
+        if key in metadata and metadata[key] != value:
+            raise ValueError(f"trace metadata conflicts with checkpoint field {key!r}")
+        metadata[key] = value
 
     if prefix:
         print(f"{prefix}start  level={level}  workers={workers}", flush=True)
@@ -518,7 +565,7 @@ def _run_one_search(level, rollouts, rollout_len, max_time, max_rewind, max_acti
         max_rewind=max_rewind, max_actions=max_actions, goal=goal,
         workers=workers, reward_config=sampler.reward_config.name,
         prior_sha256=sampler.prior_sha256,
-        metadata=trace_metadata,
+        metadata=metadata,
     )
     if prefix:
         print(f"{prefix}WIN   steps={len(actions)}  reward={reward_str}  "
