@@ -1,63 +1,81 @@
-# Level 3 search starts from a replay-derived checkpoint
+# Level 3 search starts from a Spread checkpoint near the first ladder
 
 Status: Implemented
 
-**Question.** How should Monte Carlo search avoid Level 3's unrewarded opening
-approach without replacing the canonical level state or losing the origin of
-generated traces?
+**Question.** How should distributed Level 3 search avoid the unrewarded opening
+approach while preserving the carried weapon and recording reproducible lineage?
 
-**Answer.** Level 3 search defaults to a dedicated checkpoint captured at frame
-40 of a replayable human win. The checkpoint lives in a manifested search-state
-bank, is checksum-verified when loaded, and records its source trace and exact
-subframe offset in every generated trace. Other consumers and levels continue
-to use the canonical Spread states.
-
----
-
-## A search-only state bank preserves the canonical start
-
-`src/agent/states/search_start/Level3-frame40.state` is a gzip-compressed
-stable-retro state. It does not replace
-`src/agent/states/spread_gun/Level3.state`: replay, task extraction, and policy
-environments therefore retain the full-level start unless they explicitly use
-the search bank.
-
-The adjacent `manifest.yaml` owns the state checksum and capture lineage.
-`mc_search` verifies that manifest before using the checkpoint. A missing,
-unlisted, or checksum-mismatched state is an error rather than a silent fallback.
-
-## Level 3 alone receives the checkpoint override
-
-`make_search_env(3, ...)` loads the search checkpoint by default. Levels 2 and
-4–8 continue loading their Spread states, and Level 1 continues using the
-integration state. An explicit `--initial-state` remains authoritative for
-one-off experiments.
-
-The selected inspector frame occurs after 39 complete decisions and one NES
-subframe of decision 40. The environment resets before rewinding to the captured
-bytes; this avoids stable-retro initialization shifting the selected frame.
-Search then begins from the exact state, so its three-frame decision clock is
-deterministic even though the source capture is not on a prior decision boundary.
-
-## Generated traces carry checkpoint identity
-
-Every default Level 3 search trace records `initial_state_file`,
-`initial_state_sha256`, source trace SHA-256, inspector frame, completed decision
-count, subframe offset, and source skip. This makes checkpoint-produced traces
-distinguishable from canonical-start traces and supports later prefix stitching.
-
-The first production gate is replay validity from the checkpoint. These are
-checkpoint-scope traces until a separately validated prefix-stitching path
-replays them from the canonical Level 3 state; they must not be described as
-canonical full-level traces before that gate exists.
+**Answer.** Level 3 search uses the manually captured `Level3-spread-right`
+checkpoint: player x=161 near the first ladder, Spread gun with rapid fire. A
+frozen bigram prior from 14 old wins uses 0.1 uniform smoothing. Production runs
+the measured winner `32/48/16/60` (rollouts/length/settle/rewind). Other levels
+and canonical replay states remain unchanged.
 
 ---
 
-## Provenance and auditability
+## The search-only checkpoint preserves Spread and canonical replay
+
+`src/agent/states/search_start/Level3-spread-right.state` is a gzip-compressed
+stable-retro state captured interactively from the canonical Level 3 Spread
+state. It replaces the regular-gun frame-40 checkpoint as the Level 3 search
+default, but does not replace `src/agent/states/spread_gun/Level3.state` used by
+replay, task extraction, and policy environments.
+
+The adjacent manifest pins the raw emulator-state checksum, capture facts, and
+`trace_scope: checkpoint_suffix`. `mc_search` rejects missing, unlisted, or
+checksum-mismatched state files. Generated traces retain the checkpoint filename,
+checksum, and manifest metadata.
+
+| field | value |
+|---|---:|
+| raw state SHA-256 | `bbe37b1359f2fafa7f35b71a013a41f8c901c01f18f30477c120c06cbde0b9c7` |
+| level / lives | 3 / 3 |
+| player position | x=161, y=180 |
+| weapon byte | 19 (Spread + rapid fire) |
+| trace scope | checkpoint suffix |
+
+## A frozen smoothed prior makes the checkpoint searchable
+
+`src/agent/priors/level3.yaml` stores integer transition counts from the 14 old
+Level 3 MC wins under `contra_agent/tmp/mc_trace_old/level3/`: 64,412 actions,
+64,398 candidate pairs, and no out-of-table transitions. Its action table is the
+21-action baseline table. The artifact records `smooth: 0.1`; workers normalize
+counts and blend each row with 10% uniform probability so unseen checkpoint
+states retain exploration.
+
+The old trace files are build inputs, not deployment inputs. Workers load only
+the committed YAML artifact and verify its action-table digest and prior digest.
+With the new checkpoint but a uniform prior, search timed out at 600 seconds;
+the smoothed win prior produced a win in 190.4 seconds with otherwise matching
+settings.
+
+## The measured production winner is 32/48/16/60
+
+Three local parameter sweeps used the same Spread checkpoint, prior, 32 workers,
+600-second limit, and 6,000-action limit. The selected setup uses 32 rollouts,
+48-action rollout length, settle margin 16, and maximum rewind 60.
+
+| setup | wins | mean wall time | median |
+|---|---:|---:|---:|
+| 64/48/16/60 | 5/5 | 153.1 s | 165.6 s |
+| **32/48/16/60** | **5/5** | **90.2 s** | **83.7 s** |
+| 64/64/16/60 | 5/5 | 107.1 s | 97.2 s |
+| 32/56/16/60 | 5/5 | 97.1 s | 90.6 s |
+| 32/64/16/60 | 5/5 | 109.7 s | 114.4 s |
+
+Reducing breadth below 32 caused one timeout at both 16 and 24 rollouts in the
+length-64 sweep. Increasing length did not beat 32×48. Production therefore
+keeps `32/48/16/60` and targets 25,000 committed unique Level 3 traces.
+
+## Provenance remains auditable across repositories and workers
 
 | claim | source |
 |---|---|
-| selected frame is 40 | manual inspection of `Level3_win_03220002.npz` |
-| state SHA-256 is `36d2c9e8c27269f36cc7a6c54ee484414e9dcf27f8a2808dff77a239c8562212` | `tmp/level3-start-state/frame40.json` |
-| capture is 39 decisions plus one subframe | old `contra/gui_state_inspect.py` replay loop |
-| source trace SHA-256 is `8eae2e84129c7d1a0351c5e80e3282d92c2d421756273350c773f821ea165e38` | `tmp/level3-start-state/frame40.json` |
+| checkpoint capture and raw checksum | `contra_agent/tmp/state_capture/Level3-20260825_142219.state` |
+| prior has 14 wins and 64,412 actions | `contra_agent/tmp/mc_trace_old/level3/*.npz` audit |
+| uniform-prior timeout and 190.4-second prior win | `contra_agent/tmp/mc_baseline/` logs |
+| 32×48 winner is 5/5 at 90.2 seconds | `contra_agent/tmp/mc_baseline/level3_rewind60_sweep.jsonl` |
+| interaction sweep does not beat winner | `contra_agent/tmp/mc_baseline/level3_stage3_sweep.jsonl` |
+
+Before fleet launch, one worker must verify the checkpoint checksum, non-uniform
+smoothed prior, exact `32/48/16/60` command, and one successful canary upload.

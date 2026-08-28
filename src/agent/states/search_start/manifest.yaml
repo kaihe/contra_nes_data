@@ -1,17 +1,16 @@
 seed: 0
 states:
-  - file: Level3-frame40.state
+  - file: Level3-spread-right.state
     level: Level3
-    state_sha256: 36d2c9e8c27269f36cc7a6c54ee484414e9dcf27f8a2808dff77a239c8562212
-    source_trace: contra_agent/contra/human_recordings/Level3/Level3_win_03220002.npz
-    source_trace_sha256: 8eae2e84129c7d1a0351c5e80e3282d92c2d421756273350c773f821ea165e38
-    inspector_frame: 40
-    completed_decisions: 39
-    subframes_into_action: 1
+    state_sha256: bbe37b1359f2fafa7f35b71a013a41f8c901c01f18f30477c120c06cbde0b9c7
+    capture_source: contra_agent/contra/gui_play_human.py
+    capture_time_cst: "2026-08-25T14:22:19+08:00"
     skip: 3
-    player_x_screen: 126
+    player_x_screen: 161
     player_y_screen: 180
     xscroll: 0
     yscroll: 0
-    grounded: false
+    grounded: true
+    weapon: Spread
+    rapid_fire: true
     trace_scope: checkpoint_suffix
