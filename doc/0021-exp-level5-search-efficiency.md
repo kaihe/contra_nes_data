@@ -67,9 +67,35 @@ and 152.48 wins/hour. The runner-up `8/28` produced 5/5 and 151.05 wins/hour.
 
 For every arm report attempts, search wins, replay-valid Level 6 transitions,
 wins/hour, mean wall seconds per valid win, and exact duplicate count. Attempt
-rows are the source of truth in
-`tmp/level5-search-efficiency-screen/results.jsonl`; the resumable driver writes
-the derived `summary.json` after every attempt.
+rows are the source of truth; the resumable driver writes each derived
+`summary.json` after every attempt. Every measured arm below produced 5/5
+search wins, 5/5 replay-valid transitions, and zero exact duplicates.
+
+| Stage 1 arm | mean seconds/win | wins/hour |
+|---|---:|---:|
+| narrower (`8/24/8/15`) | 23.07 | 156.05 |
+| deeper (`16/32/8/15`) | 32.02 | 112.44 |
+| l1_fast (`16/24/8/15`) | 34.92 | 103.09 |
+| shallower (`16/16/8/15`) | 50.16 | 71.76 |
+| wider (`32/24/8/15`) | 55.49 | 64.87 |
+
+| Stage 2 arm | mean seconds/win | wins/hour |
+|---|---:|---:|
+| rollouts_4 (`4/24/8/15`) | 23.61 | 152.48 |
+| length_28 (`8/28/8/15`) | 23.83 | 151.05 |
+| current_winner (`8/24/8/15`) | 25.06 | 143.67 |
+| rollouts_6 (`6/24/8/15`) | 29.21 | 123.26 |
+| length_20 (`8/20/8/15`) | 30.35 | 118.62 |
+| rollouts_12 (`12/24/8/15`) | 35.15 | 102.42 |
+
+| Stage 3 arm | mean seconds/win | wins/hour |
+|---|---:|---:|
+| rewind_8 (`4/24/8/8`) | 17.45 | 206.35 |
+| settle_4 (`4/24/4/15`) | 19.83 | 181.57 |
+| rewind_12 (`4/24/8/12`) | 21.30 | 169.04 |
+| stage2_winner (`4/24/8/15`) | 22.57 | 159.50 |
+| rewind_24 (`4/24/8/24`) | 33.88 | 106.26 |
+| settle_12 (`4/24/12/15`) | 55.58 | 64.77 |
 
 | source claim | provenance |
 |---|---|
@@ -77,6 +103,9 @@ the derived `summary.json` after every attempt.
 | old MC win has 2,442 actions | `contra_agent/tmp/mc_trace_old/level5/win_level5_202606181019.npz` audit |
 | old human win has 2,918 actions | `contra_agent/contra/human_recordings/Level5/03281906.npz` audit |
 | both traces replay Level 5 to Level 6 | stable-retro replay audit on 2026-08-28 |
+| Stage 1 table | `tmp/level5-search-efficiency-screen/{results.jsonl,summary.json}` |
+| Stage 2 table | `tmp/level5-search-efficiency-breadth-lookahead/{results.jsonl,summary.json}` |
+| Stage 3 table | `tmp/level5-search-efficiency-settle-rewind/{results.jsonl,summary.json}` |
 
 ## 4. Conclusion
 
