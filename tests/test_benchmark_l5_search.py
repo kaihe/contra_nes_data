@@ -1,4 +1,4 @@
-from util.benchmark_l5_search import ARMS, round_order, summarize
+from util.benchmark_l5_search import ARMS, STAGES, round_order, summarize
 
 
 def test_round_order_keeps_l1_baseline_first_and_is_complete():
@@ -6,6 +6,14 @@ def test_round_order_keeps_l1_baseline_first_and_is_complete():
 
     assert order[0] == "l1_fast"
     assert set(order) == set(ARMS)
+
+
+def test_breadth_lookahead_stage_starts_from_stage1_winner():
+    arms = STAGES["breadth-lookahead"]
+
+    assert next(iter(arms)) == "current_winner"
+    assert arms["current_winner"].rollouts == 8
+    assert arms["current_winner"].rollout_len == 24
 
 
 def test_summary_counts_valid_throughput_and_duplicates():
