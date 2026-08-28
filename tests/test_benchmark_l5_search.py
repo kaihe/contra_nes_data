@@ -16,6 +16,14 @@ def test_breadth_lookahead_stage_starts_from_stage1_winner():
     assert arms["current_winner"].rollout_len == 24
 
 
+def test_settle_rewind_stage_anchors_to_stage2_winner():
+    arms = STAGES["settle-rewind"]
+
+    assert next(iter(arms)) == "stage2_winner"
+    assert arms["stage2_winner"].rollouts == 4
+    assert arms["stage2_winner"].rollout_len == 24
+
+
 def test_summary_counts_valid_throughput_and_duplicates():
     rows = [
         {"arm": "l1_fast", "attempt_wall_s": 20, "search_win": True,

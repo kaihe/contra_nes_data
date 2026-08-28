@@ -48,6 +48,14 @@ STAGES = {
         "length_20": Arm(8, 20, 8, 15),
         "length_28": Arm(8, 28, 8, 15),
     },
+    "settle-rewind": {
+        "stage2_winner": Arm(4, 24, 8, 15),
+        "rewind_8": Arm(4, 24, 8, 8),
+        "rewind_12": Arm(4, 24, 8, 12),
+        "rewind_24": Arm(4, 24, 8, 24),
+        "settle_4": Arm(4, 24, 4, 15),
+        "settle_12": Arm(4, 24, 12, 15),
+    },
 }
 
 
