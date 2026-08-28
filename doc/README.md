@@ -18,6 +18,6 @@
 - [0018 Frame-difference one-token encoder](0018-design-frame-difference-one-token-encoder.md) — Proposed — early-fuse current RGB and signed frame difference into one 512-D token
 - [0019 Frame-difference one-token experiment](0019-exp-frame-difference-one-token-encoder.md) — Implemented — accept temporal input after large projectile gains with modest reconstruction cost
 - [0020 Level 3 search checkpoint](0020-design-level3-search-checkpoint.md) — Implemented — Spread+rapid ladder checkpoint, smoothed win prior, and `32/48/16/60`
-- [0021 Level 5 search efficiency](0021-exp-level5-search-efficiency.md) — Proposed — screen Level 1 search parameters with a frozen two-win prior
+- [0021 Level 5 search efficiency](0021-exp-level5-search-efficiency.md) — Implemented — use `4/24/8/8` with the frozen two-win prior
 - [Entities](ENTITIES.md) — Legacy — RAM entity taxonomy and extraction notes
 - [Events](EVENTS.md) — Legacy — event semantics and trace statistics

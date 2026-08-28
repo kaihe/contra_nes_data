@@ -1,6 +1,6 @@
 # Level 5 search efficiency
 
-Status: Proposed
+Status: Implemented
 
 ## 1. Goal
 
@@ -109,4 +109,7 @@ search wins, 5/5 replay-valid transitions, and zero exact duplicates.
 
 ## 4. Conclusion
 
-_Pending user conclusion after the measured sweep._
+Use `4/24/8/8` for Level 5 production search: 4 rollouts, rollout length 24,
+settle margin 8, and max rewind 8. The `rewind_8` arm achieved 5/5
+replay-valid wins with zero duplicates at 206.35 wins/hour. This is fast enough;
+do not extend the exploratory sweep.
