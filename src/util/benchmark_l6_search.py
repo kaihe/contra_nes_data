@@ -16,9 +16,26 @@ ARMS = {
     "length_28": Arm(4, 28, 8, 8),
 }
 
+HIGH_COMPUTE_SCOUT = {
+    "old_contra_baseline": Arm(64, 48, 16, 60),
+    "rollouts_16": Arm(16, 48, 16, 60),
+    "rollouts_32": Arm(32, 48, 16, 60),
+    "rollouts_96": Arm(96, 48, 16, 60),
+    "length_64": Arm(64, 64, 16, 60),
+    "rewind_30": Arm(64, 48, 16, 30),
+    "settle_8": Arm(64, 48, 8, 60),
+}
+
+STAGES = {
+    "low-compute": ARMS,
+    "high-compute-scout": HIGH_COMPUTE_SCOUT,
+}
+
 
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--stage", choices=sorted(STAGES),
+                        default="high-compute-scout")
     parser.add_argument("--out", default="tmp/level6-search-efficiency-screen")
     parser.add_argument("--attempts", type=int, default=5)
     parser.add_argument("--seed", type=int, default=20260828)
@@ -28,7 +45,7 @@ def main(argv=None) -> None:
     args = parser.parse_args(argv)
     if min(args.attempts, args.workers, args.max_time, args.max_actions) < 1:
         raise SystemExit("attempt and resource limits must be positive")
-    benchmark.ARMS = ARMS
+    benchmark.ARMS = STAGES[args.stage]
     benchmark.run(
         out=Path(args.out), attempts=args.attempts, seed=args.seed,
         workers=args.workers, max_time=args.max_time,
