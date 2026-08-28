@@ -34,6 +34,32 @@ Working results, summaries, and replay-validation traces live under
 `tmp/level5-search-efficiency-screen/`. Later stages must be added to this same
 document before they run.
 
+Stage 2 follows the 5/5 Stage 1 winner `8/24/8/15` and runs five attempts for
+each breadth/lookahead arm under
+`tmp/level5-search-efficiency-breadth-lookahead/`.
+
+| arm | rollouts | rollout length | settle margin | max rewind |
+|---|---:|---:|---:|---:|
+| current_winner | 8 | 24 | 8 | 15 |
+| rollouts_4 | 4 | 24 | 8 | 15 |
+| rollouts_6 | 6 | 24 | 8 | 15 |
+| rollouts_12 | 12 | 24 | 8 | 15 |
+| length_20 | 8 | 20 | 8 | 15 |
+| length_28 | 8 | 28 | 8 | 15 |
+
+Stage 3 anchors rollouts and rollout length to the measured Stage 2 winner and
+runs five attempts for each backtracking arm under
+`tmp/level5-search-efficiency-settle-rewind/`.
+
+| arm | settle margin | max rewind |
+|---|---:|---:|
+| stage2_winner | 8 | 15 |
+| rewind_8 | 8 | 8 |
+| rewind_12 | 8 | 12 |
+| rewind_24 | 8 | 24 |
+| settle_4 | 4 | 15 |
+| settle_12 | 12 | 15 |
+
 ## 3. Evaluation metrics
 
 For every arm report attempts, search wins, replay-valid Level 6 transitions,
