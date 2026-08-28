@@ -38,6 +38,18 @@ ARMS = {
     "deeper": Arm(16, 32, 8, 15),
 }
 
+STAGES = {
+    "screen": ARMS,
+    "breadth-lookahead": {
+        "current_winner": Arm(8, 24, 8, 15),
+        "rollouts_4": Arm(4, 24, 8, 15),
+        "rollouts_6": Arm(6, 24, 8, 15),
+        "rollouts_12": Arm(12, 24, 8, 15),
+        "length_20": Arm(8, 20, 8, 15),
+        "length_28": Arm(8, 28, 8, 15),
+    },
+}
+
 
 def read_rows(path: Path) -> list[dict]:
     if not path.exists():
@@ -110,9 +122,10 @@ def write_summary(path: Path, rows: list[dict]) -> None:
 
 
 def round_order(attempt: int, seed: int) -> list[str]:
+    baseline = next(iter(ARMS))
     challengers = list(ARMS)[1:]
     random.Random(seed + attempt).shuffle(challengers)
-    return ["l1_fast", *challengers]
+    return [baseline, *challengers]
 
 
 def run(*, out: Path, attempts: int, seed: int, workers: int,
@@ -160,7 +173,9 @@ def run(*, out: Path, attempts: int, seed: int, workers: int,
 
 
 def main(argv=None) -> None:
+    global ARMS
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--stage", choices=sorted(STAGES), default="screen")
     parser.add_argument("--out", default="tmp/level5-search-efficiency-screen")
     parser.add_argument("--attempts", type=int, default=5)
     parser.add_argument("--seed", type=int, default=20260828)
@@ -170,6 +185,7 @@ def main(argv=None) -> None:
     args = parser.parse_args(argv)
     if min(args.attempts, args.workers, args.max_time, args.max_actions) < 1:
         raise SystemExit("attempt and resource limits must be positive")
+    ARMS = STAGES[args.stage]
     run(out=Path(args.out), attempts=args.attempts, seed=args.seed,
         workers=args.workers, max_time=args.max_time, max_actions=args.max_actions)
 
