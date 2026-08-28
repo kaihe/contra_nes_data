@@ -78,7 +78,8 @@ def test_load_initial_state_checks_manifest_and_returns_lineage(tmp_path):
         "seed": 7,
         "states": [{
             "file": state_path.name, "state_sha256": digest,
-            "source_task": "train-task", "boss_hp_start": 32, "skip": 3,
+            "level": "Level3", "source_task": "train-task",
+            "boss_hp_start": 32, "skip": 3,
         }],
     }
     (tmp_path / "manifest.yaml").write_text(yaml.safe_dump(manifest))
@@ -91,6 +92,7 @@ def test_load_initial_state_checks_manifest_and_returns_lineage(tmp_path):
     assert metadata["state_bank_seed"] == 7
     assert metadata["source_skip"] == 3
     assert metadata["initial_state_sha256"] == digest
+    assert "level" not in metadata
 
 
 def test_level3_default_search_state_is_manifested_checkpoint():

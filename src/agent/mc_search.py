@@ -155,8 +155,10 @@ def load_initial_state(path: str) -> tuple[bytes, dict]:
         expected = entry.get("state_sha256")
         if expected and expected != metadata["initial_state_sha256"]:
             raise ValueError(f"state checksum does not match {manifest_path}: {path}")
+        # ``level`` is already a reserved top-level trace field. The manifest's
+        # copy validates the state bank for humans but must not overwrite it.
         metadata.update({k: v for k, v in entry.items()
-                         if k not in {"file", "state_sha256", "skip"}})
+                         if k not in {"file", "state_sha256", "skip", "level"}})
         if "skip" in entry:
             metadata["source_skip"] = entry["skip"]
         metadata["state_bank_seed"] = manifest.get("seed", -1)
