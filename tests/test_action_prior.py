@@ -189,7 +189,9 @@ def test_level6_uses_smoothed_committed_prior_without_trace_glob(monkeypatch):
     sampler = ActionSampler.for_level(6)
     assert sampler.prior_sha256
     assert sampler.level == 6
-    assert len(sampler.names) == 15
+    assert len(sampler.names) == 21
+    assert "DJ" in sampler.names
+    assert "LJ" in sampler.names
     assert np.all(sampler.prior_pmf > 0)
     assert not np.allclose(sampler.prior_pmf, sampler.uniform_pmf)
 
