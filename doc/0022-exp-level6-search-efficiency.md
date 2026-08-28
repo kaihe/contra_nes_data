@@ -30,6 +30,26 @@ results live under `tmp/level6-search-efficiency-screen/`.
 | length_20 | 4 | 20 | 8 | 8 |
 | length_28 | 4 | 28 | 8 | 8 |
 
+The low-compute screen was stopped after its first four completed attempts all
+timed out at 600 seconds. Stage 2 moves to a high-compute scout grid around the
+original Contra Agent default. Run one interleaved attempt per arm first under
+`tmp/level6-search-efficiency-high-compute-scout/`; do not spend five timeouts
+per arm before establishing which region can win.
+
+| arm | rollouts | rollout length | settle margin | max rewind |
+|---|---:|---:|---:|---:|
+| old_contra_baseline | 64 | 48 | 16 | 60 |
+| rollouts_16 | 16 | 48 | 16 | 60 |
+| rollouts_32 | 32 | 48 | 16 | 60 |
+| rollouts_96 | 96 | 48 | 16 | 60 |
+| length_64 | 64 | 64 | 16 | 60 |
+| rewind_30 | 64 | 48 | 16 | 30 |
+| settle_8 | 64 | 48 | 8 | 60 |
+
+After scouting, retain the three fastest replay-valid arms and run four more
+attempts each, giving each finalist five total attempts. If fewer than three
+arms win, retain every winning arm and add no speculative confirmation cells.
+
 ## 3. Evaluation metrics
 
 Report attempts, search wins, replay-valid transitions, mean seconds per valid
