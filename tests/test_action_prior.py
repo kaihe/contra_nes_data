@@ -183,6 +183,17 @@ def test_level5_uses_smoothed_committed_prior_without_trace_glob(monkeypatch):
     assert not np.allclose(sampler.prior_pmf, sampler.uniform_pmf)
 
 
+def test_level6_uses_smoothed_committed_prior_without_trace_glob(monkeypatch):
+    monkeypatch.setattr("agent.sampler.glob.glob",
+                        lambda pattern: pytest.fail(f"unexpected trace scan: {pattern}"))
+    sampler = ActionSampler.for_level(6)
+    assert sampler.prior_sha256
+    assert sampler.level == 6
+    assert len(sampler.names) == 15
+    assert np.all(sampler.prior_pmf > 0)
+    assert not np.allclose(sampler.prior_pmf, sampler.uniform_pmf)
+
+
 def test_gcs_collector_keeps_unique_committed_fingerprints(tmp_path):
     _, actions, _, _ = ActionSampler._level_config(2)
     first = _committed_batch(tmp_path, "cloud-a", "batch-a", [

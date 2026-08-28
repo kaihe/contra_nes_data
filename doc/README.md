@@ -19,5 +19,6 @@
 - [0019 Frame-difference one-token experiment](0019-exp-frame-difference-one-token-encoder.md) — Implemented — accept temporal input after large projectile gains with modest reconstruction cost
 - [0020 Level 3 search checkpoint](0020-design-level3-search-checkpoint.md) — Implemented — Spread+rapid ladder checkpoint, smoothed win prior, and `32/48/16/60`
 - [0021 Level 5 search efficiency](0021-exp-level5-search-efficiency.md) — Implemented — use `4/24/8/8` with the frozen two-win prior
+- [0022 Level 6 search efficiency](0022-exp-level6-search-efficiency.md) — Proposed — screen the Level 5 winner with a frozen two-win prior
 - [Entities](ENTITIES.md) — Legacy — RAM entity taxonomy and extraction notes
 - [Events](EVENTS.md) — Legacy — event semantics and trace statistics
