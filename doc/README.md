@@ -14,6 +14,6 @@
 - [0013 Level 4 search efficiency](0013-exp-level4-search-efficiency.md) — Proposed — adopt `16/48/8/15`; prior `src/agent/priors/level4.yaml`
 - [0015 Enhanced one-token image encoder](0015-exp-enhanced-one-token-image-encoder.md) — Implemented — 1024-D does not improve projectile localization or hallucination enough to replace 512-D
 - [0016 Motion-aware one-token image encoder](0016-design-motion-one-token-image-encoder.md) — Proposed — pixel-aligned residual and appearance streams fuse into one 512-D token
-- [0021 Level 5 search efficiency](0021-exp-level5-search-efficiency.md) — Proposed — screen Level 1 search parameters with a frozen two-win prior
+- [0021 Level 5 search efficiency](0021-exp-level5-search-efficiency.md) — Implemented — use `4/24/8/8` with the frozen two-win prior
 - [Entities](ENTITIES.md) — Legacy — RAM entity taxonomy and extraction notes
 - [Events](EVENTS.md) — Legacy — event semantics and trace statistics

@@ -1,5 +1,5 @@
-# Level 5 is an outdoor forward side-scroll level. Start its parameter search
-# with Level 1's trimmed table, costs, and winning 16/24/8/15 search shape.
+# Level 5 is an outdoor forward side-scroll level. Production search uses the
+# measured doc/0021 winner: 4 rollouts, length 24, settle 8, max rewind 8.
 skip: 3
 actions:
   _:   [0, 0, 0, 0, 0, 0, 0, 0, 0]
