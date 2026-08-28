@@ -51,6 +51,9 @@ Stage 3 anchors rollouts and rollout length to the measured Stage 2 winner and
 runs five attempts for each backtracking arm under
 `tmp/level5-search-efficiency-settle-rewind/`.
 
+Stage 2 selected `4/24`: it produced 5/5 replay-valid wins, zero duplicates,
+and 152.48 wins/hour. The runner-up `8/28` produced 5/5 and 151.05 wins/hour.
+
 | arm | settle margin | max rewind |
 |---|---:|---:|
 | stage2_winner | 8 | 15 |
