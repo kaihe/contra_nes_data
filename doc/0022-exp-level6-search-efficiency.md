@@ -10,11 +10,11 @@ replay-valid Level 7 transitions per hour.
 
 ## 2. Setup
 
-Search starts from the canonical Level 6 Spread + rapid-fire state. The action
-table and costs match the trimmed outdoor Level 5 table. A frozen bigram prior
+Search starts from the canonical Level 6 Spread + rapid-fire state. Level 6
+uses the full 21-action baseline vocabulary used by old Contra Agent, including
+the `DJ` and `LJ` actions present in its winning traces. A frozen bigram prior
 is counted from the old MC and human wins and blended 10% toward uniform. Both
 sources replay from Level 6 into Level 7; together they contain 4,750 actions.
-The trimmed table excludes 42 rare source actions.
 
 Stage 1 runs five interleaved attempts per arm with eight workers, frame skip
 3, a 600-second time limit, and a 6,000-action limit. The Level 5 winner runs
@@ -32,8 +32,10 @@ results live under `tmp/level6-search-efficiency-screen/`.
 
 The low-compute screen was stopped after its first four completed attempts all
 timed out at 600 seconds. Stage 2 moves to a high-compute scout grid around the
-original Contra Agent default. Run one interleaved attempt per arm first under
-`tmp/level6-search-efficiency-high-compute-scout/`; do not spend five timeouts
+original Contra Agent default. The earlier high-compute attempts used the
+incorrect trimmed table and are not comparable. Run one fresh interleaved
+attempt per arm under
+`tmp/level6-search-efficiency-full-actions-scout/`; do not spend five timeouts
 per arm before establishing which region can win.
 
 | arm | rollouts | rollout length | settle margin | max rewind |
