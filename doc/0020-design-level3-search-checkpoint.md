@@ -1,6 +1,6 @@
 # Level 3 search starts from a Spread checkpoint near the first ladder
 
-Status: Proposed
+Status: Implemented
 
 **Question.** How should distributed Level 3 search avoid the unrewarded opening
 approach while preserving the carried weapon and recording reproducible lineage?

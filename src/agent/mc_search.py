@@ -64,7 +64,7 @@ SEARCH_START_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 # Search-only checkpoints remove unrewarded level openings without replacing the
 # canonical Spread states used by replay, task extraction, and policy training.
 SEARCH_START_BY_LEVEL = {
-    3: os.path.join(SEARCH_START_DIR, "Level3-frame40.state"),
+    3: os.path.join(SEARCH_START_DIR, "Level3-spread-right.state"),
 }
 # Winning traces are product, not scratch (see CLAUDE.md): game_trace/mc_trace/.
 TRACE_DIR = os.path.join(

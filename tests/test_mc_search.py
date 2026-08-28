@@ -99,10 +99,11 @@ def test_level3_default_search_state_is_manifested_checkpoint():
     state, metadata = mc_search.load_initial_state(path)
 
     assert state
-    assert os.path.basename(path) == "Level3-frame40.state"
-    assert metadata["inspector_frame"] == 40
-    assert metadata["completed_decisions"] == 39
-    assert metadata["subframes_into_action"] == 1
+    assert os.path.basename(path) == "Level3-spread-right.state"
+    assert metadata["player_x_screen"] == 161
+    assert metadata["grounded"] is True
+    assert metadata["weapon"] == "Spread"
+    assert metadata["rapid_fire"] is True
     assert metadata["trace_scope"] == "checkpoint_suffix"
 
 
