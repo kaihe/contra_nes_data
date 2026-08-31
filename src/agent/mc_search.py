@@ -260,7 +260,12 @@ class _Search:
         return True
 
     def _lookahead(self) -> tuple[list, float, bool]:
-        """Sample `rollouts` rollouts; return (best_seq, death_rate, best_died)."""
+        """Prefer the best survivor; rewind only when every rollout dies.
+
+        A fatal rollout can outscore a safe continuation by collecting progress
+        or combat reward just before death. Selecting it would discard viable
+        paths and repeatedly backtrack at late-level hazards.
+        """
         prev_action = self.actions[-1] if self.actions else _NOOP
         task = (self.state.emu_state, self.rollout_len, self.cur_level, prev_action)
         if self.pool is not None:
@@ -270,12 +275,15 @@ class _Search:
             rewind_state(self.env, self.state.emu_state)
 
         self.sampled += sum(len(seq) for seq, _, _ in results)
-        best_seq, best_reward, best_died, deaths = None, -float("inf"), True, 0
+        best_seq, best_reward, deaths = None, -float("inf"), 0
         for seq, reward, died in results:
             deaths += died
-            if reward > best_reward:
-                best_reward, best_seq, best_died = reward, seq, died
-        return best_seq, deaths / self.rollouts, best_died
+            if not died and reward > best_reward:
+                best_reward, best_seq = reward, seq
+        all_died = deaths == self.rollouts
+        if all_died:
+            best_seq, best_reward = max(results, key=lambda result: result[1])[:2]
+        return best_seq, deaths / self.rollouts, all_died
 
     def _rewind(self, death_rate: float, elapsed: float) -> None:
         """Every rollout died: roll back a random amount and widen the search."""

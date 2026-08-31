@@ -8,18 +8,18 @@ from util.benchmark_l5_search import Arm
 
 
 ARMS = {
-    "scout_winner": Arm(64, 48, 16, 30),
+    "old_contra_baseline": Arm(64, 48, 16, 60),
+    "rewind_30": Arm(64, 48, 16, 30),
     "rewind_15": Arm(64, 48, 16, 15),
     "rewind_45": Arm(64, 48, 16, 45),
-    "rollouts_32": Arm(32, 48, 16, 30),
-    "rollouts_96": Arm(96, 48, 16, 30),
-    "old_contra_baseline": Arm(64, 48, 16, 60),
+    "rollouts_32": Arm(32, 48, 16, 60),
+    "rollouts_96": Arm(96, 48, 16, 60),
 }
 
 
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--out", default="tmp/level6-search-efficiency-targeted")
+    parser.add_argument("--out", default="tmp/level6-search-efficiency-survivor-fix")
     parser.add_argument("--attempts", type=int, default=5)
     parser.add_argument("--seed", type=int, default=20260828)
     parser.add_argument("--workers", type=int, default=8)

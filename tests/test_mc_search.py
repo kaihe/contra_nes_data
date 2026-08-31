@@ -18,6 +18,56 @@ def test_level2_uses_tuned_prior_and_costs():
     assert sampler.reward_config.reward_weights["J"] == pytest.approx(-0.02)
 
 
+def test_lookahead_prefers_survivor_over_higher_reward_death():
+    fatal = ([np.ones(9, dtype=np.uint8)], 10.0, True)
+    survivor = ([np.zeros(9, dtype=np.uint8)], 2.0, False)
+
+    class Pool:
+        @staticmethod
+        def map(_fn, _tasks):
+            return [fatal, survivor]
+
+    search = object.__new__(mc_search._Search)
+    search.state = mc_search.State(emu_state=b"state")
+    search.actions = []
+    search.rollout_len = 48
+    search.cur_level = 6
+    search.rollouts = 2
+    search.pool = Pool()
+    search.sampled = 0
+
+    best_seq, death_rate, all_died = search._lookahead()
+
+    assert np.array_equal(best_seq[0], survivor[0][0])
+    assert death_rate == pytest.approx(0.5)
+    assert not all_died
+
+
+def test_lookahead_returns_best_fatal_path_when_all_die():
+    lower = ([np.zeros(9, dtype=np.uint8)], 2.0, True)
+    higher = ([np.ones(9, dtype=np.uint8)], 10.0, True)
+
+    class Pool:
+        @staticmethod
+        def map(_fn, _tasks):
+            return [lower, higher]
+
+    search = object.__new__(mc_search._Search)
+    search.state = mc_search.State(emu_state=b"state")
+    search.actions = []
+    search.rollout_len = 48
+    search.cur_level = 6
+    search.rollouts = 2
+    search.pool = Pool()
+    search.sampled = 0
+
+    best_seq, death_rate, all_died = search._lookahead()
+
+    assert np.array_equal(best_seq[0], higher[0][0])
+    assert death_rate == pytest.approx(1.0)
+    assert all_died
+
+
 def test_winning_trace_name_matches_dataset_glob(tmp_path, monkeypatch):
     class Finished:
         done = True
