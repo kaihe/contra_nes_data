@@ -63,6 +63,18 @@ source of truth; regenerate the summary after every attempt. Rank arms by
 replay-valid wins/hour, with replay-valid success rate as the reliability gate
 and mean wall time as the tie-breaker.
 
+The repaired sweep completed all 30 attempts. Every search win replayed into
+Level 7, and the 27 valid traces had distinct fingerprints.
+
+| arm | valid / attempts | success | total wall (s) | mean s/win | wins/hour | median sampled/win | duplicates |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| rewind_15 | 5/5 | 100% | 314.61 | 62.92 | 57.21 | 219,393 | 0 |
+| old_contra_baseline | 5/5 | 100% | 369.73 | 73.95 | 48.68 | 222,743 | 0 |
+| rollouts_32 | 4/5 | 80% | 310.97 | 77.74 | 46.31 | 195,889 | 0 |
+| rewind_45 | 5/5 | 100% | 433.33 | 86.67 | 41.54 | 275,357 | 0 |
+| rollouts_96 | 5/5 | 100% | 541.69 | 108.34 | 33.23 | 396,761 | 0 |
+| rewind_30 | 3/5 | 60% | 580.03 | 193.34 | 18.62 | 343,305 | 0 |
+
 | source claim | provenance |
 |---|---|
 | 21-action vocabulary and order | `contra_agent/contra/action_configs/baseline.yaml` |
