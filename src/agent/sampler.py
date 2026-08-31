@@ -129,7 +129,7 @@ def action_table_sha256(actions: np.ndarray) -> str:
 
 def load_prior_artifact(path: str, actions: np.ndarray,
                         names: tuple[str, ...]) -> tuple[np.ndarray, str]:
-    """Load and strictly validate a versioned integer bigram matrix."""
+    """Load and strictly validate a versioned, optionally smoothed bigram."""
     raw_bytes = open(path, "rb").read()
     raw = yaml.safe_load(raw_bytes)
     if raw.get("format_version") != 1 or raw.get("mode") != "bigram":
@@ -145,7 +145,13 @@ def load_prior_artifact(path: str, actions: np.ndarray,
         raise ValueError(f"prior counts are {counts.shape}, expected nonnegative {shape}")
     if int(counts.sum()) != int(raw.get("included_pairs", -1)):
         raise ValueError(f"prior included_pairs does not match counts: {path}")
-    return _bigram_pmf(counts), hashlib.sha256(raw_bytes).hexdigest()
+    smooth = float(raw.get("smooth", 0.0))
+    if not 0.0 <= smooth <= 1.0:
+        raise ValueError(f"prior smooth must be in [0, 1]: {path}")
+    prior = _bigram_pmf(counts)
+    if smooth > 0:
+        prior = (1.0 - smooth) * prior + smooth / len(actions)
+    return prior.astype(np.float32), hashlib.sha256(raw_bytes).hexdigest()
 
 
 def build_prior(table: np.ndarray, files: list[str], mode: str = "bigram",
