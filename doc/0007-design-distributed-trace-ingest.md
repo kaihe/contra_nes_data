@@ -150,6 +150,20 @@ enough to search. Operational gates are: fewer than 0.5% wins lost in a
 1%; p95 commit-to-ack below 15 minutes at twice planned scale; and zero accepted
 checksum mismatches during fault injection.
 
+## Committed-marker counting avoids archive and manifest reads
+
+Operational trace counts come from `COMMITTED.json.trace_count`, the same
+visibility boundary consumers already trust. `python -m util.gcs_trace_count`
+lists commit markers under a tracehouse root, downloads the small markers
+concurrently, and aggregates counts by level, scope, and worker. It never reads
+archives or manifests and excludes uncommitted uploads by construction.
+
+The command emits a human table by default and stable JSON with `--json`.
+Per-level prefixes and the schema root are both valid inputs. Missing or invalid
+`trace_count` fields fail the query instead of silently estimating batch size.
+Open worker batches are intentionally outside this GCS count and must be
+reported separately from durable spools.
+
 ## Staged GCS scale-up
 
 1. Archive 100 current NPZs and accept the default only if the size gate passes.
