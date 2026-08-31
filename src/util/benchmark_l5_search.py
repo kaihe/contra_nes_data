@@ -73,8 +73,8 @@ def append_row(path: Path, row: dict) -> None:
         os.fsync(output.fileno())
 
 
-def replay_level_up(path: Path) -> dict:
-    """Replay a candidate and verify its Level 5 to Level 6 transition."""
+def replay_level_up(path: Path, *, start_level: int = 5) -> dict:
+    """Replay a candidate and verify its configured level transition."""
     with np.load(path, allow_pickle=True) as data:
         initial = bytes(data["initial_state"])
         actions = np.asarray(data["actions"], dtype=np.uint8)
@@ -90,7 +90,8 @@ def replay_level_up(path: Path) -> dict:
             before = env.unwrapped.get_ram().copy()
             step_env(env, action, skip)
             after = env.unwrapped.get_ram().copy()
-            if EV_LEVEL_TRANSITION.trigger(before, after) or get_level(after) != 5:
+            if (EV_LEVEL_TRANSITION.trigger(before, after)
+                    or get_level(after) != start_level):
                 reached = True
                 break
     finally:
@@ -137,7 +138,7 @@ def round_order(attempt: int, seed: int) -> list[str]:
 
 
 def run(*, out: Path, attempts: int, seed: int, workers: int,
-        max_time: int, max_actions: int) -> None:
+        max_time: int, max_actions: int, level: int = 5) -> None:
     rows = read_rows(out / "results.jsonl")
     done = {(row["arm"], int(row["attempt"])) for row in rows}
     total = attempts * len(ARMS)
@@ -153,13 +154,13 @@ def run(*, out: Path, attempts: int, seed: int, workers: int,
             print(f"[{sequence}/{total}] {arm_name} attempt={attempt}", flush=True)
             started = time.perf_counter()
             won = _run_one_search(
-                level=5, rollouts=arm.rollouts, rollout_len=arm.rollout_len,
+                level=level, rollouts=arm.rollouts, rollout_len=arm.rollout_len,
                 settle_margin=arm.settle_margin, max_rewind=arm.max_rewind,
                 max_time=max_time, max_actions=max_actions, goal="level_up",
                 workers=workers, verbose=False,
                 instance_id=attempt * len(ARMS) + list(ARMS).index(arm_name),
                 trace_path=str(trace),
-                trace_metadata={"experiment": "l5-search-efficiency",
+                trace_metadata={"experiment": f"l{level}-search-efficiency",
                                 "experiment_arm": arm_name,
                                 "experiment_attempt": attempt,
                                 "experiment_seed": seed},
@@ -173,7 +174,7 @@ def run(*, out: Path, attempts: int, seed: int, workers: int,
                 "trace_path": str(trace) if won else None,
             }
             if won:
-                row.update(replay_level_up(trace))
+                row.update(replay_level_up(trace, start_level=level))
             append_row(out / "results.jsonl", row)
             rows.append(row)
             write_summary(out / "summary.json", rows)
